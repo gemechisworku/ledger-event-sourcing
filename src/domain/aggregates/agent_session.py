@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ledger.domain.errors import DomainError
-from ledger.domain.streams import agent_stream_id
+from src.domain.errors import DomainError
+from src.domain.streams import agent_stream_id
 
 
 class AgentSessionAggregate:

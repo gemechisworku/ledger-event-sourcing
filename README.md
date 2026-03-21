@@ -25,7 +25,7 @@ uv run python datagen/generate_all.py --skip-db --skip-docs --validate-only
 # 7. Schema & generator tests (run before EventStore work)
 uv run pytest tests/test_schema_and_generator.py -v
 
-# 8. Event store — implement in ledger/event_store.py
+# 8. Event store — implement in src/event_store.py
 # uv run pytest tests/test_event_store.py -v
 ```
 
@@ -54,10 +54,10 @@ If you map another host port (e.g. `-p 5433:5432` because `5432` is busy), only 
 
 **Phase 1 PostgreSQL tests** try each of `TEST_DB_URL`, `DATABASE_URL`, `APPLICANT_REGISTRY_URL`, then a Docker-friendly default (`tests/pg_helpers.py`), so one stale URL in `.env` does not block the others. `tests/test_event_store.py` also deletes prior `test-%` streams so appends with `expected_version=-1` stay valid across runs. With any working URL, `uv run pytest tests/test_event_store.py tests/test_applicant_registry_client.py -v` hits the real DB; otherwise integration tests skip.
 
-`EventStore.connect()` applies `ledger/schema.sql` on first connect (idempotent `CREATE IF NOT EXISTS`).
+`EventStore.connect()` applies `src/schema.sql` on first connect (idempotent `CREATE IF NOT EXISTS`).
 
 ## Included in the starter
-- Full event schema (45 event types) — `ledger/schema/events.py`
+- Full event schema (45 event types) — `src/schema/events.py`
 - Data generator (GAAP PDFs, Excel, CSV, 1,200+ seed events)
 - Event simulator (five agent pipelines, deterministic)
 - Schema validator (events against `EVENT_REGISTRY`)
@@ -66,17 +66,17 @@ If you map another host port (e.g. `-p 5433:5432` because `5432` is busy), only 
 ## Implementation roadmap
 | Component | File | Phase |
 |-----------|------|-------|
-| EventStore | `ledger/event_store.py` | 1 |
-| ApplicantRegistryClient | `ledger/registry/client.py` | 1 |
-| Domain aggregates | `ledger/domain/aggregates/` | 2 |
-| DocumentProcessingAgent | `ledger/agents/base_agent.py` | 2 |
-| CreditAnalysisAgent | `ledger/agents/base_agent.py` | 2 (reference) |
-| FraudDetectionAgent | `ledger/agents/base_agent.py` | 3 |
-| ComplianceAgent | `ledger/agents/base_agent.py` | 3 |
-| DecisionOrchestratorAgent | `ledger/agents/base_agent.py` | 3 |
-| Projections + daemon | `ledger/projections/` | 4 |
-| Upcasters | `ledger/upcasters.py` | 4 |
-| MCP server | `ledger/mcp_server.py` | 5 |
+| EventStore | `src/event_store.py` | 1 |
+| ApplicantRegistryClient | `src/registry/client.py` | 1 |
+| Domain aggregates | `src/domain/aggregates/` | 2 |
+| DocumentProcessingAgent | `src/agents/base_agent.py` | 2 |
+| CreditAnalysisAgent | `src/agents/base_agent.py` | 2 (reference) |
+| FraudDetectionAgent | `src/agents/base_agent.py` | 3 |
+| ComplianceAgent | `src/agents/base_agent.py` | 3 |
+| DecisionOrchestratorAgent | `src/agents/base_agent.py` | 3 |
+| Projections + daemon | `src/projections/` | 4 |
+| Upcasters | `src/upcasters.py` | 4 |
+| MCP server | `src/mcp_server.py` | 5 |
 
 Design and module specs live under [`spec/`](spec/).
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ledger.domain.errors import DomainError
-from ledger.domain.streams import compliance_stream_id
+from src.domain.errors import DomainError
+from src.domain.streams import compliance_stream_id
 
 
 class ComplianceRecordAggregate:

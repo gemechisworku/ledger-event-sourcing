@@ -1,5 +1,5 @@
 """
-ledger/event_store.py — PostgreSQL-backed EventStore
+src/event_store.py — PostgreSQL-backed EventStore
 ====================================================
 Phase 1: append (OCC + outbox), load_stream, load_all, stream_version, get_event.
 Phase 4: pass UpcasterRegistry via upcaster_registry for load paths.

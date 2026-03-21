@@ -7,4 +7,4 @@
 | `concurrency-and-outbox.md` | OCC semantics, transaction boundaries, outbox |
 | `double-decision-test.md` | Concurrent append test spec |
 
-**Code:** `ledger/event_store.py` (+ SQL migrations if you add `schema.sql`).
+**Code:** `src/event_store.py` (+ SQL migrations if you add `schema.sql`).

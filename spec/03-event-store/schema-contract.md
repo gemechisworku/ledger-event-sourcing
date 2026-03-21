@@ -2,7 +2,7 @@
 
 **Source:** [`../../ref_docs/requirements.md`](../../ref_docs/requirements.md) — Phase 1.
 
-Implement as migration SQL (e.g. `ledger/schema.sql` or your migration tool). **Document every column in `DESIGN.md`.**
+Implement as migration SQL (e.g. `src/schema.sql` or your migration tool). **Document every column in `DESIGN.md`.**
 
 ## `events`
 

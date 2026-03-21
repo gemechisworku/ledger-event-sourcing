@@ -17,7 +17,7 @@ async def main():
     # TODO: Route to appropriate agent(s) based on --phase
     print(f"Processing {args.application} through phase: {args.phase}")
     print("TODO: Implement after EventStore and agents are complete.")
-    print("See ledger/event_store.py and ledger/agents/base_agent.py")
+    print("See src/event_store.py and src/agents/base_agent.py")
 
 if __name__ == "__main__":
     asyncio.run(main())

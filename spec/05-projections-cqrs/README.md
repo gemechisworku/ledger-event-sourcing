@@ -10,4 +10,4 @@
 | [`projections/agent-performance.md`](projections/agent-performance.md) | AgentPerformanceLedger columns |
 | [`projections/compliance-audit.md`](projections/compliance-audit.md) | ComplianceAuditView + temporal + rebuild |
 
-**Code:** `ledger/projections/` (to create).
+**Code:** `src/projections/` (to create).

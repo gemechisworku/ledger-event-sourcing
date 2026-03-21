@@ -1,5 +1,5 @@
 """
-ledger/agents/base_agent.py
+src/agents/base_agent.py
 ===========================
 BASE LANGGRAPH AGENT + all 5 agent class stubs.
 CreditAnalysisAgent is the reference implementation with full LangGraph pattern.

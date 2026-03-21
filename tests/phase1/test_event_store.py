@@ -10,7 +10,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from ledger.event_store import InMemoryEventStore, OptimisticConcurrencyError
+from src.event_store import InMemoryEventStore, OptimisticConcurrencyError
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ async def test_all_seed_event_types_validate():
     """
     import json
     from pathlib import Path
-    from ledger.schema.events import EVENT_REGISTRY
+    from src.schema.events import EVENT_REGISTRY
 
     seed_file = Path("data/seed_events.jsonl")
     if not seed_file.exists():

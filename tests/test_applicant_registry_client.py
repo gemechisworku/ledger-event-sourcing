@@ -24,8 +24,8 @@ try:
 except ImportError:
     pass
 
-from ledger.registry.client import ApplicantRegistryClient
-from ledger.registry.schema import REGISTRY_SQL
+from src.registry.client import ApplicantRegistryClient
+from src.registry.schema import REGISTRY_SQL
 from tests.pg_helpers import candidate_postgres_urls
 
 TEST_COMPANY_ID = "__pytest_registry_client__"

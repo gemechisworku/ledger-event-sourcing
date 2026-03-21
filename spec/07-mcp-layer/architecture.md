@@ -21,4 +21,4 @@ If a step needs a bypass, the MCP surface is incomplete.
 
 ## Stack
 
-- **FastMcp** (`pyproject.toml`) — `ledger/mcp_server.py` entrypoint.
+- **FastMcp** (`pyproject.toml`) — `src/mcp_server.py` entrypoint.

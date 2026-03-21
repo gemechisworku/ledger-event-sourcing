@@ -8,18 +8,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from ledger.domain.aggregates.agent_session import AgentSessionAggregate
-from ledger.domain.aggregates.compliance_record import ComplianceRecordAggregate
-from ledger.domain.aggregates.loan_application import LoanApplicationAggregate
-from ledger.domain.errors import DomainError
-from ledger.domain.streams import (
+from src.domain.aggregates.agent_session import AgentSessionAggregate
+from src.domain.aggregates.compliance_record import ComplianceRecordAggregate
+from src.domain.aggregates.loan_application import LoanApplicationAggregate
+from src.domain.errors import DomainError
+from src.domain.streams import (
     agent_stream_id,
     compliance_stream_id,
     credit_stream_id,
     fraud_stream_id,
     loan_stream_id,
 )
-from ledger.schema.events import (
+from src.schema.events import (
     AgentSessionStarted,
     AgentType,
     ApplicationApproved,

@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ledger.domain.errors import DomainError
-from ledger.domain.streams import compliance_stream_id, credit_stream_id, fraud_stream_id, loan_stream_id
-from ledger.schema.events import ApplicationState
+from src.domain.errors import DomainError
+from src.domain.streams import compliance_stream_id, credit_stream_id, fraud_stream_id, loan_stream_id
+from src.schema.events import ApplicationState
 
 
 _LOAN_ONLY: dict[str, ApplicationState] = {

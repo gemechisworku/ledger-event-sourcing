@@ -18,7 +18,7 @@ Modular **design specs** derived from [`../ref_docs/requirements.md`](../ref_doc
 | [`07-mcp-layer/`](07-mcp-layer/) | Tools, resources, LLM errors |
 | [`08-bonus-phase6/`](08-bonus-phase6/) | What-if, regulatory package |
 | [`09-documentation/`](09-documentation/) | Test strategy, `DESIGN.md` outline |
-| [`mappings/`](mappings/) | `src/` → `ledger/` layout |
+| [`mappings/`](mappings/) | `src/` tree layout |
 
 ## Repo layout
 

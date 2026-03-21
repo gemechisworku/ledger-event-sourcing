@@ -29,10 +29,10 @@
 | AgentContextLoaded | AgentSession | 1 | agent_id, session_id, context_source, event_replay_from_position, context_token_count, model_version |
 | AuditIntegrityCheckRun | AuditLedger | 1 | entity_id, check_timestamp, events_verified_count, integrity_hash, previous_hash |
 
-**Gap analysis:** Requirements state the catalogue is **incomplete** — identify missing events (e.g. transitions, intermediate states) and add to `ledger/schema/events.py` + registry.
+**Gap analysis:** Requirements state the catalogue is **incomplete** — identify missing events (e.g. transitions, intermediate states) and add to `src/schema/events.py` + registry.
 
 ## Code layout
 
-- `ledger/domain/aggregates/loan_application.py` — extend
+- `src/domain/aggregates/loan_application.py` — extend
 - Add `compliance_record.py`, `audit_ledger.py` as needed
 - `AgentSession` — same folder or `agent_session.py`

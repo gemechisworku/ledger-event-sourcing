@@ -8,11 +8,11 @@ from decimal import Decimal
 
 import pytest
 
-from ledger.domain.aggregates.agent_session import AgentSessionAggregate
-from ledger.domain.aggregates.compliance_record import ComplianceRecordAggregate
-from ledger.domain.aggregates.loan_application import LoanApplicationAggregate
-from ledger.domain.errors import DomainError
-from ledger.domain.handlers import (
+from src.domain.aggregates.agent_session import AgentSessionAggregate
+from src.domain.aggregates.compliance_record import ComplianceRecordAggregate
+from src.domain.aggregates.loan_application import LoanApplicationAggregate
+from src.domain.errors import DomainError
+from src.domain.handlers import (
     append_loan_event,
     handle_application_approved,
     handle_compliance_pipeline,
@@ -25,9 +25,9 @@ from ledger.domain.handlers import (
     handle_start_agent_session,
     handle_submit_application,
 )
-from ledger.domain.streams import agent_stream_id
-from ledger.event_store import InMemoryEventStore
-from ledger.schema.events import (
+from src.domain.streams import agent_stream_id
+from src.event_store import InMemoryEventStore
+from src.schema.events import (
     AgentType,
     ComplianceCheckRequested,
     CreditAnalysisRequested,
@@ -114,7 +114,7 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
 async def test_gas_town_first_event_must_be_agent_session_started(store: InMemoryEventStore):
     sid = "sess-bad"
     stream = agent_stream_id(AgentType.CREDIT_ANALYSIS.value, sid)
-    from ledger.schema.events import AgentNodeExecuted
+    from src.schema.events import AgentNodeExecuted
 
     bad = AgentNodeExecuted(
         session_id=sid,

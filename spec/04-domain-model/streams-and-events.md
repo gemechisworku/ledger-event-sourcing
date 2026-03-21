@@ -11,7 +11,7 @@
 
 ## Catalogue vs code
 
-- **Authoritative models:** `ledger/schema/events.py`, `EVENT_REGISTRY`, datagen validator.
+- **Authoritative models:** `src/schema/events.py`, `EVENT_REGISTRY`, datagen validator.
 - **Drift:** Compare [`aggregates.md`](aggregates.md) table to `EVENT_REGISTRY`; add missing types and versions.
 
 ## Metadata

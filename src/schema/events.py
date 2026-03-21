@@ -1,5 +1,5 @@
 """
-ledger/schema/events.py
+src/schema/events.py
 =======================
 CANONICAL EVENT SCHEMA — THE LEDGER (WEEKS 9-10)
 

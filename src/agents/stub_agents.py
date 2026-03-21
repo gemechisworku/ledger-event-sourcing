@@ -1,5 +1,5 @@
 """
-ledger/agents/stub_agents.py
+src/agents/stub_agents.py
 ============================
 STUB IMPLEMENTATIONS for DocumentProcessingAgent, FraudDetectionAgent,
 ComplianceAgent, and DecisionOrchestratorAgent.
@@ -23,7 +23,7 @@ from uuid import uuid4
 
 from langgraph.graph import StateGraph, END
 
-from ledger.agents.base_agent import BaseApexAgent
+from src.agents.base_agent import BaseApexAgent
 
 
 # ─── DOCUMENT PROCESSING AGENT ───────────────────────────────────────────────

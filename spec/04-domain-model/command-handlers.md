@@ -48,7 +48,7 @@ async def handle_credit_analysis_completed(
     )
 ```
 
-**Note:** If `CreditAnalysisCompleted` is stored on **AgentSession** stream per catalogue, adjust stream target — **your** `ledger/schema/events.py` and requirements must agree; multi-stream appends may need **sagas** or **ordered steps** (document).
+**Note:** If `CreditAnalysisCompleted` is stored on **AgentSession** stream per catalogue, adjust stream target — **your** `src/schema/events.py` and requirements must agree; multi-stream appends may need **sagas** or **ordered steps** (document).
 
 ## Commands to implement (minimum set)
 
@@ -62,4 +62,4 @@ async def handle_credit_analysis_completed(
 
 ## ApplicantRegistryClient
 
-- `ledger/registry/client.py` — lookup applicant profile, duplicate `application_id`, etc. as required by tests.
+- `src/registry/client.py` — lookup applicant profile, duplicate `application_id`, etc. as required by tests.

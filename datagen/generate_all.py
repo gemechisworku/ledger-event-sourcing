@@ -10,7 +10,7 @@ from pathlib import Path
 from faker import Faker
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from ledger.registry.schema import REGISTRY_SQL
+from src.registry.schema import REGISTRY_SQL
 from datagen.company_generator import generate_companies, TRAJECTORIES
 from datagen.pdf_generator import (generate_income_statement_pdf, generate_balance_sheet_pdf,
                                     generate_application_proposal_pdf)

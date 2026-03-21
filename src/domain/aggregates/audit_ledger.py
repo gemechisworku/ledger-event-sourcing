@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ledger.domain.streams import audit_stream_id
+from src.domain.streams import audit_stream_id
 
 
 class AuditLedgerAggregate:

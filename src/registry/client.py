@@ -1,5 +1,5 @@
 """
-ledger/registry/client.py — Applicant Registry read-only client
+src/registry/client.py — Applicant Registry read-only client
 ===============================================================
 Reads from the `applicant_registry` schema in PostgreSQL (CRM / datagen seed).
 READ-ONLY — no writes from the event-sourced ledger.

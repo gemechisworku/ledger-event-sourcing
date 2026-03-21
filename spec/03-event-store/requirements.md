@@ -1,7 +1,7 @@
 # EventStore — functional requirements
 
 **Source:** [`../../ref_docs/requirements.md`](../../ref_docs/requirements.md)  
-**Implementation:** `ledger/event_store.py`
+**Implementation:** `src/event_store.py`
 
 ## `append`
 
@@ -67,7 +67,7 @@ async def get_stream_metadata(self, stream_id: str) -> StreamMetadata
 
 ## Types
 
-- `BaseEvent` — Pydantic; `ledger/schema/events.py`
+- `BaseEvent` — Pydantic; `src/schema/events.py`
 - `StoredEvent` — persisted envelope: `event_id`, `stream_id`, `stream_position`, `global_position`, `event_type`, `event_version`, `payload`, `metadata`, `recorded_at`
 - `OptimisticConcurrencyError`, `DomainError` — custom exceptions
 

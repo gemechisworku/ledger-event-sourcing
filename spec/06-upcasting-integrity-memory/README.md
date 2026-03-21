@@ -6,4 +6,4 @@
 | [`audit-chain.md`](audit-chain.md) | `run_integrity_check`, SHA-256 chain |
 | [`gas-town.md`](gas-town.md) | `reconstruct_agent_context`, crash recovery test |
 
-**Code:** `ledger/upcasters.py`, optional `ledger/integrity/`.
+**Code:** `src/upcasters.py`, optional `src/integrity/`.

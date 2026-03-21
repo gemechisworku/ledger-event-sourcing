@@ -24,7 +24,7 @@ try:
 except ImportError:
     pass
 
-from ledger.event_store import EventStore, OptimisticConcurrencyError
+from src.event_store import EventStore, OptimisticConcurrencyError
 from tests.pg_helpers import candidate_postgres_urls
 
 

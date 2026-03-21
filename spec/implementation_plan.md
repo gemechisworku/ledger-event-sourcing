@@ -27,7 +27,7 @@
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
 | 0.1 | Tooling & env | `uv sync`, Postgres, `.env` from `.env.example` | `uv sync` OK; Postgres needed from Phase 1 onward | [x] |
-| 0.2 | Schema & generator tests | [`04-domain-model/aggregates.md`](04-domain-model/aggregates.md) vs `ledger/schema/events.py` | `uv run pytest tests/test_schema_and_generator.py -v` | [x] |
+| 0.2 | Schema & generator tests | [`04-domain-model/aggregates.md`](04-domain-model/aggregates.md) vs `src/schema/events.py` | `uv run pytest tests/test_schema_and_generator.py -v` | [x] |
 | 0.3 | Domain notes doc | [`02-phase0-reconnaissance/`](02-phase0-reconnaissance/) | `DOMAIN_NOTES.md` at repo root answers six questions | [x] |
 
 ---
@@ -36,15 +36,15 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 1.1 | SQL migrations | [`ledger/schema.sql`](../ledger/schema.sql), [`03-event-store/schema-contract.md`](03-event-store/schema-contract.md) | Applied on `EventStore.connect()` | [x] |
+| 1.1 | SQL migrations | [`src/schema.sql`](../src/schema.sql), [`03-event-store/schema-contract.md`](03-event-store/schema-contract.md) | Applied on `EventStore.connect()` | [x] |
 | 1.2 | `EventStore.append` | [`03-event-store/requirements.md`](03-event-store/requirements.md), [`concurrency-and-outbox.md`](03-event-store/concurrency-and-outbox.md) | OCC + same-tx outbox inserts | [x] |
 | 1.3 | `load_stream` / `load_all` | Upcasting hook point (stub OK until Phase 4) | Streams replay in order; `load_all` batches | [x] |
 | 1.4 | `stream_version`, `archive_stream`, `get_stream_metadata` | [`03-event-store/requirements.md`](03-event-store/requirements.md) | Implemented; checkpoints `save`/`load` for projections | [x] |
-| 1.5 | `ApplicantRegistryClient` | [`04-domain-model/command-handlers.md`](04-domain-model/command-handlers.md) | `ledger/registry/client.py` matches tests | [x] |
+| 1.5 | `ApplicantRegistryClient` | [`04-domain-model/command-handlers.md`](04-domain-model/command-handlers.md) | `src/registry/client.py` matches tests | [x] |
 | 1.6 | Concurrency test | [`03-event-store/double-decision-test.md`](03-event-store/double-decision-test.md) | Double-append test passes | [x] |
 | 1.7 | Gate | — | `uv run pytest tests/test_event_store.py tests/test_applicant_registry_client.py -v` (+ `tests/phase1/` if used) | [x] |
 
-**Primary code:** `ledger/event_store.py`, migrations under `ledger/` or `schema/`.
+**Primary code:** `src/event_store.py`, migrations under `src/` or `schema/`.
 
 ---
 
@@ -67,7 +67,7 @@
 | 3.1 | Agents on `base_agent.py` | [`04-domain-model/README.md`](04-domain-model/README.md), README roadmap | Fraud, compliance, orchestrator, doc processing per roadmap | [ ] |
 | 3.2 | Gate | — | `uv run pytest tests/test_narratives.py -v` | [ ] |
 
-**Primary code:** `ledger/agents/base_agent.py`, `ledger/agents/*`.
+**Primary code:** `src/agents/base_agent.py`, `src/agents/*`.
 
 ---
 
@@ -84,7 +84,7 @@
 | 4.7 | Gas Town | [`06-upcasting-integrity-memory/gas-town.md`](06-upcasting-integrity-memory/gas-town.md) | `reconstruct_agent_context` + crash scenario test | [ ] |
 | 4.8 | Gate | — | `uv run pytest tests/test_projections.py -v` + any `test_upcasting` / `test_gas_town` | [ ] |
 
-**Primary code:** `ledger/projections/`, `ledger/upcasters.py`, optional `ledger/integrity/`.
+**Primary code:** `src/projections/`, `src/upcasters.py`, optional `src/integrity/`.
 
 ---
 
@@ -98,7 +98,7 @@
 | 5.4 | Lifecycle integration | [`07-mcp-layer/architecture.md`](07-mcp-layer/architecture.md) | Full flow via MCP only | [ ] |
 | 5.5 | Gate | — | `uv run pytest tests/test_mcp.py -v` (+ `test_mcp_lifecycle` if split) | [ ] |
 
-**Primary code:** `ledger/mcp_server.py`.
+**Primary code:** `src/mcp_server.py`.
 
 ---
 
@@ -131,9 +131,9 @@ _Add a row when you complete a phase or merge a significant chunk._
 | Date | What changed |
 |------|----------------|
 | 2026-03-19 | **Phase 0 complete:** `uv sync`; `pytest tests/test_schema_and_generator.py` **10 passed**; added root [`DOMAIN_NOTES.md`](../DOMAIN_NOTES.md) (six questions). Postgres not required for Phase 0 gate. |
-| 2026-03-19 | **Phase 1 (EventStore):** `ledger/schema.sql` + PostgreSQL `EventStore` (append OCC, outbox, load_stream, load_all, checkpoints). `tests/test_event_store.py` vs Docker Postgres; integration tests **skip** if DB unreachable. `tests/phase1/test_event_store.py` **11 passed** (InMemory). |
-| 2026-03-19 | **Phase 1 complete (1.5):** `ApplicantRegistryClient` implemented in `ledger/registry/client.py`; shared DDL in `ledger/registry/schema.py` (used by `datagen/generate_all.py`). `tests/test_applicant_registry_client.py` **6 passed** vs Postgres. Event store integration tests also accept `APPLICANT_REGISTRY_URL` as DB fallback. |
-| 2026-03-21 | **Phase 2 complete:** `ledger/domain/aggregates/*` (LoanApplication, AgentSession, ComplianceRecord, AuditLedger), `ledger/domain/handlers.py`, `ledger/domain/streams.py`. Business rules: Gas Town (first event `AgentSessionStarted`), confidence floor REFER, contributing sessions, second credit + human override, compliance before approval. Gate: `pytest tests/test_domain.py` **8 passed** (InMemory). |
+| 2026-03-19 | **Phase 1 (EventStore):** `src/schema.sql` + PostgreSQL `EventStore` (append OCC, outbox, load_stream, load_all, checkpoints). `tests/test_event_store.py` vs Docker Postgres; integration tests **skip** if DB unreachable. `tests/phase1/test_event_store.py` **11 passed** (InMemory). |
+| 2026-03-19 | **Phase 1 complete (1.5):** `ApplicantRegistryClient` implemented in `src/registry/client.py`; shared DDL in `src/registry/schema.py` (used by `datagen/generate_all.py`). `tests/test_applicant_registry_client.py` **6 passed** vs Postgres. Event store integration tests also accept `APPLICANT_REGISTRY_URL` as DB fallback. |
+| 2026-03-21 | **Phase 2 complete:** `src/domain/aggregates/*` (LoanApplication, AgentSession, ComplianceRecord, AuditLedger), `src/domain/handlers.py`, `src/domain/streams.py`. Business rules: Gas Town (first event `AgentSessionStarted`), confidence floor REFER, contributing sessions, second credit + human override, compliance before approval. Gate: `pytest tests/test_domain.py` **8 passed** (InMemory). |
 
 ---
 

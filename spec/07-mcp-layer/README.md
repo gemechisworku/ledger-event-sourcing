@@ -7,4 +7,4 @@
 | [`resources-spec.md`](resources-spec.md) | Six URIs — sources and SLOs |
 | [`errors-for-llms.md`](errors-for-llms.md) | Typed errors, preconditions |
 
-**Code:** `ledger/mcp_server.py` (+ optional `tools.py` / `resources.py`).
+**Code:** `src/mcp_server.py` (+ optional `tools.py` / `resources.py`).

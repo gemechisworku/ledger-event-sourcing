@@ -9,4 +9,4 @@
 | [`command-handlers.md`](command-handlers.md) | Handler pattern + example + command list |
 | [`aggregate-reconstruction.md`](aggregate-reconstruction.md) | `load` / `_apply` / `_on_*` pattern |
 
-**Code:** `ledger/domain/aggregates/`, `ledger/agents/base_agent.py`, `ledger/registry/client.py`.
+**Code:** `src/domain/aggregates/`, `src/agents/base_agent.py`, `src/registry/client.py`.
