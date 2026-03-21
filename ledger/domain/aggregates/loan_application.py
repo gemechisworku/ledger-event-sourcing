@@ -14,7 +14,7 @@ BUSINESS RULES TO ENFORCE:
   5. Compliance BLOCKED → only DECLINE allowed, not APPROVE or REFER
   6. Causal chain: every agent event must reference a triggering event_id
 
-See: Section 4 of challenge document for full rule specifications.
+See: `spec/04-domain-model/business-rules.md` and `ref_docs/requirements.md` for rule specifications.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field

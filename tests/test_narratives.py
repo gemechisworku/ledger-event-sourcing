@@ -9,7 +9,7 @@ Run: pytest tests/test_narratives.py -v -s
 import pytest, sys
 from pathlib import Path; sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Narrative scenarios tested here match Section 7 of the challenge document.
+# Narrative scenarios align with product requirements and agent pipeline specs.
 # Each test drives a complete application through the real agent pipeline.
 
 @pytest.mark.asyncio

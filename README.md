@@ -1,46 +1,49 @@
-# The Ledger — Weeks 9-10 Starter Code
+# The Ledger
+
+Event-sourced audit infrastructure for multi-agent commercial loan processing at Apex Financial Services.
 
 ## Quick Start
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# 1. Install uv (if needed): https://docs.astral.sh/uv/getting-started/installation/
 
-# 2. Start PostgreSQL
+# 2. Create env and install dependencies
+uv sync
+
+# 3. Start PostgreSQL
 docker run -d -e POSTGRES_PASSWORD=apex -e POSTGRES_DB=apex_ledger -p 5432:5432 postgres:16
 
-# 3. Set environment
+# 4. Set environment
 cp .env.example .env
 # Edit .env — add your ANTHROPIC_API_KEY
 
-# 4. Generate all data (companies + documents + seed events → DB)
-python datagen/generate_all.py --db-url postgresql://postgres:apex@localhost/apex_ledger
+# 5. Generate all data (companies + documents + seed events → DB)
+uv run python datagen/generate_all.py --db-url postgresql://postgres:apex@localhost/apex_ledger
 
-# 5. Validate schema (no DB needed)
-python datagen/generate_all.py --skip-db --skip-docs --validate-only
+# 6. Validate schema (no DB needed)
+uv run python datagen/generate_all.py --skip-db --skip-docs --validate-only
 
-# 6. Run Phase 0 tests (must pass before starting Phase 1)
-pytest tests/test_schema_and_generator.py -v
+# 7. Schema & generator tests (run before EventStore work)
+uv run pytest tests/test_schema_and_generator.py -v
 
-# 7. Begin Phase 1: implement EventStore
-# Edit: ledger/event_store.py
-# Test: pytest tests/test_event_store.py -v
+# 8. Event store — implement in ledger/event_store.py
+# uv run pytest tests/test_event_store.py -v
 ```
 
-## What Works Out of the Box
+## Included in the starter
 - Full event schema (45 event types) — `ledger/schema/events.py`
-- Complete data generator (GAAP PDFs, Excel, CSV, 1,200+ seed events)
-- Event simulator (all 5 agent pipelines, deterministic)
-- Schema validator (validates all events against EVENT_REGISTRY)
-- Phase 0 tests: 10/10 passing
+- Data generator (GAAP PDFs, Excel, CSV, 1,200+ seed events)
+- Event simulator (five agent pipelines, deterministic)
+- Schema validator (events against `EVENT_REGISTRY`)
+- Schema/generator tests
 
-## What You Implement
+## Implementation roadmap
 | Component | File | Phase |
 |-----------|------|-------|
 | EventStore | `ledger/event_store.py` | 1 |
 | ApplicantRegistryClient | `ledger/registry/client.py` | 1 |
 | Domain aggregates | `ledger/domain/aggregates/` | 2 |
 | DocumentProcessingAgent | `ledger/agents/base_agent.py` | 2 |
-| CreditAnalysisAgent | `ledger/agents/base_agent.py` | 2 (reference given) |
+| CreditAnalysisAgent | `ledger/agents/base_agent.py` | 2 (reference) |
 | FraudDetectionAgent | `ledger/agents/base_agent.py` | 3 |
 | ComplianceAgent | `ledger/agents/base_agent.py` | 3 |
 | DecisionOrchestratorAgent | `ledger/agents/base_agent.py` | 3 |
@@ -48,12 +51,14 @@ pytest tests/test_schema_and_generator.py -v
 | Upcasters | `ledger/upcasters.py` | 4 |
 | MCP server | `ledger/mcp_server.py` | 5 |
 
-## Gate Tests by Phase
+Design and module specs live under [`spec/`](spec/).
+
+## Tests by phase
 ```bash
-pytest tests/test_schema_and_generator.py -v  # Phase 0: all must pass before Phase 1
-pytest tests/test_event_store.py -v           # Phase 1
-pytest tests/test_domain.py -v               # Phase 2
-pytest tests/test_narratives.py -v           # Phase 3: all 5 must pass
-pytest tests/test_projections.py -v          # Phase 4
-pytest tests/test_mcp.py -v                  # Phase 5
+uv run pytest tests/test_schema_and_generator.py -v  # Phase 0
+uv run pytest tests/test_event_store.py -v           # Phase 1
+uv run pytest tests/test_domain.py -v               # Phase 2
+uv run pytest tests/test_narratives.py -v           # Phase 3
+uv run pytest tests/test_projections.py -v          # Phase 4
+uv run pytest tests/test_mcp.py -v                  # Phase 5
 ```

@@ -1,7 +1,7 @@
 """
 tests/phase1/test_event_store.py
 =================================
-Phase 1 gate tests — EventStore core.
+Phase 1 tests — EventStore core.
 All must pass before starting Phase 2.
 
 Run: pytest tests/phase1/ -v
