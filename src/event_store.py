@@ -17,14 +17,18 @@ import asyncpg
 from src.schema.events import StoredEvent, StreamMetadata
 
 
+from dataclasses import dataclass as _dc
+
+
+@_dc(frozen=True)
 class OptimisticConcurrencyError(Exception):
     """Raised when expected_version doesn't match current stream version."""
+    stream_id: str
+    expected: int
+    actual: int
 
-    def __init__(self, stream_id: str, expected: int, actual: int):
-        self.stream_id = stream_id
-        self.expected = expected
-        self.actual = actual
-        super().__init__(f"OCC on '{stream_id}': expected v{expected}, actual v{actual}")
+    def __str__(self) -> str:
+        return f"OCC on '{self.stream_id}': expected v{self.expected}, actual v{self.actual}"
 
 
 def _schema_sql() -> str:
