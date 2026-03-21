@@ -25,6 +25,7 @@ except ImportError:
     pass
 
 from src.event_store import EventStore, OptimisticConcurrencyError
+from src.schema.events import StoredEvent
 from tests.pg_helpers import candidate_postgres_urls
 
 
@@ -100,13 +101,20 @@ async def test_concurrent_double_append_exactly_one_succeeds(store):
     assert len(successes) == 1, f"Expected exactly 1 success, got {len(successes)}"
     assert len(errors) == 1
 
+    stream_events = await store.load_stream("test-concurrent-001")
+    assert len(stream_events) == 2, "Init + exactly one winning append"
+    assert stream_events[1].stream_position == 2
+
 @pytest.mark.asyncio
 async def test_load_stream_ordered(store):
     await store.append("test-load-001", _event("E",3), expected_version=-1)
     events = await store.load_stream("test-load-001")
     assert len(events) == 3
-    positions = [e["stream_position"] for e in events]
+    assert all(isinstance(e, StoredEvent) for e in events)
+    positions = [e.stream_position for e in events]
     assert positions == sorted(positions)
+    assert events[0].event_type == "E"
+    assert isinstance(events[0].payload, dict)
 
 @pytest.mark.asyncio
 async def test_stream_version(store):
@@ -122,5 +130,28 @@ async def test_load_all_yields_in_global_order(store):
     await store.append("test-global-A", _event("E",2), expected_version=-1)
     await store.append("test-global-B", _event("E",2), expected_version=-1)
     all_events = [e async for e in store.load_all(from_position=0)]
-    positions = [e["global_position"] for e in all_events]
+    positions = [e.global_position for e in all_events]
     assert positions == sorted(positions)
+
+@pytest.mark.asyncio
+async def test_correlation_id_stored_in_metadata(store):
+    """correlation_id and causation_id are persisted into event metadata."""
+    await store.append(
+        "test-corr-001", _event("E"), expected_version=-1,
+        correlation_id="corr-abc", causation_id="caus-xyz",
+    )
+    events = await store.load_stream("test-corr-001")
+    assert len(events) == 1
+    assert events[0].metadata["correlation_id"] == "corr-abc"
+    assert events[0].metadata["causation_id"] == "caus-xyz"
+
+@pytest.mark.asyncio
+async def test_stream_metadata_typed(store):
+    """get_stream_metadata returns StreamMetadata typed object."""
+    from src.schema.events import StreamMetadata
+    await store.append("test-meta-001", _event("E",2), expected_version=-1)
+    meta = await store.get_stream_metadata("test-meta-001")
+    assert meta is not None
+    assert isinstance(meta, StreamMetadata)
+    assert meta.stream_id == "test-meta-001"
+    assert meta.current_version == 2

@@ -714,3 +714,40 @@ def deserialize_event(event_type: str, payload: dict) -> BaseEvent:
     if not cls:
         raise ValueError(f"Unknown event_type: {event_type!r}")
     return cls(event_type=event_type, **payload)
+
+
+# ─── STORED EVENT ENVELOPE ───────────────────────────────────────────────────
+# Persistence-assigned wrapper returned by EventStore.load_stream / load_all.
+# Distinct from BaseEvent: domain emits BaseEvent, the store returns StoredEvent.
+
+from dataclasses import dataclass, field as dc_field
+
+@dataclass(frozen=True)
+class StoredEvent:
+    """Immutable envelope carrying a domain event plus store-assigned metadata."""
+    event_id: UUID | str
+    stream_id: str
+    stream_position: int
+    global_position: int
+    event_type: str
+    event_version: int
+    payload: dict
+    metadata: dict
+    recorded_at: datetime | str | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
+@dataclass
+class StreamMetadata:
+    """Typed model for event_streams table rows."""
+    stream_id: str
+    aggregate_type: str
+    current_version: int
+    created_at: datetime | None = None
+    archived_at: datetime | None = None
+    metadata: dict = dc_field(default_factory=dict)

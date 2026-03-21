@@ -1,17 +1,21 @@
-"""AuditLedger aggregate — append-only audit stream."""
+"""AuditLedger aggregate — append-only audit stream.
+
+Uses per-event dispatch: _apply delegates to _on_{EventType} methods.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from src.domain.streams import audit_stream_id
+from src.schema.events import StoredEvent
 
 
 class AuditLedgerAggregate:
     def __init__(self, entity_type: str, entity_id: str) -> None:
         self.entity_type = entity_type
         self.entity_id = entity_id
-        self.version: int = 0
+        self.version: int = -1
         self.event_count: int = 0
 
     @property
@@ -27,6 +31,12 @@ class AuditLedgerAggregate:
         agg.version = await store.stream_version(agg.stream_id)
         return agg
 
-    def _apply(self, event: dict) -> None:
-        self.version = int(event["stream_position"])
+    def _apply(self, event: StoredEvent) -> None:
+        handler = getattr(self, f"_on_{event.event_type}", None)
+        if handler:
+            handler(event)
+        self.version = event.stream_position
         self.event_count += 1
+
+    def _on_AuditIntegrityCheckRun(self, event: StoredEvent) -> None:
+        pass

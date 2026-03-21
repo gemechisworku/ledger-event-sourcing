@@ -25,7 +25,7 @@ from src.domain.handlers import (
     handle_start_agent_session,
     handle_submit_application,
 )
-from src.domain.streams import agent_stream_id
+from src.domain.streams import agent_stream_id, loan_stream_id
 from src.event_store import InMemoryEventStore
 from src.schema.events import (
     AgentType,
@@ -36,7 +36,12 @@ from src.schema.events import (
     FraudScreeningRequested,
     LoanPurpose,
     RiskTier,
+    StoredEvent,
 )
+
+
+CORRELATION = "corr-test-001"
+CAUSATION = "caus-test-001"
 
 
 @pytest.fixture
@@ -56,6 +61,8 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         contact_email="a@b.co",
         contact_name="A",
         application_reference="REF-1",
+        correlation_id=CORRELATION,
+        causation_id=CAUSATION,
     )
     ev = CreditAnalysisRequested(
         application_id=app_id,
@@ -64,7 +71,10 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         priority="NORMAL",
     )
     await append_loan_event(store, app_id, ev.to_store_dict())
-    await handle_open_credit_record(store, application_id=app_id, applicant_id="COMP-1")
+    await handle_open_credit_record(
+        store, application_id=app_id, applicant_id="COMP-1",
+        correlation_id=CORRELATION, causation_id=CAUSATION,
+    )
     await handle_start_agent_session(
         store,
         agent_type=AgentType.CREDIT_ANALYSIS,
@@ -72,6 +82,8 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         agent_id="agent-credit",
         application_id=app_id,
         model_version="credit-v2",
+        correlation_id=CORRELATION,
+        causation_id=CAUSATION,
     )
     decision = CreditDecision(
         risk_tier=RiskTier.MEDIUM,
@@ -85,6 +97,8 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         session_id=session_id,
         decision=decision,
         model_version="credit-v2",
+        correlation_id=CORRELATION,
+        causation_id=CAUSATION,
     )
     ev2 = FraudScreeningRequested(
         application_id=app_id,
@@ -92,7 +106,10 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         triggered_by_event_id="e1",
     )
     await append_loan_event(store, app_id, ev2.to_store_dict())
-    await handle_fraud_pipeline(store, application_id=app_id, session_id=session_id)
+    await handle_fraud_pipeline(
+        store, application_id=app_id, session_id=session_id,
+        correlation_id=CORRELATION, causation_id=CAUSATION,
+    )
     ev3 = ComplianceCheckRequested(
         application_id=app_id,
         requested_at=datetime.now(timezone.utc),
@@ -106,8 +123,41 @@ async def _loan_pipeline_to_decision_ready(store: InMemoryEventStore, app_id: st
         application_id=app_id,
         session_id=session_id,
         rules_to_evaluate=["REG-001", "REG-002"],
+        correlation_id=CORRELATION,
+        causation_id=CAUSATION,
     )
-    await handle_decision_requested(store, application_id=app_id, triggered_by_event_id="e3")
+    await handle_decision_requested(
+        store, application_id=app_id, triggered_by_event_id="e3",
+        correlation_id=CORRELATION, causation_id=CAUSATION,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stored_event_attributes(store: InMemoryEventStore):
+    """Events returned by load_stream are StoredEvent with attribute access."""
+    await handle_submit_application(
+        store,
+        application_id="APEX-SE-001",
+        applicant_id="COMP-1",
+        requested_amount_usd=Decimal("100000"),
+        loan_purpose=LoanPurpose.WORKING_CAPITAL,
+        loan_term_months=12,
+        submission_channel="api",
+        contact_email="a@b.co",
+        contact_name="A",
+        application_reference="REF-SE",
+        correlation_id="corr-se-001",
+        causation_id="caus-se-001",
+    )
+    events = await store.load_stream(loan_stream_id("APEX-SE-001"))
+    assert len(events) == 1
+    ev = events[0]
+    assert isinstance(ev, StoredEvent)
+    assert ev.event_type == "ApplicationSubmitted"
+    assert ev.stream_position == 0
+    assert ev.payload["applicant_id"] == "COMP-1"
+    assert ev.metadata["correlation_id"] == "corr-se-001"
+    assert ev.metadata["causation_id"] == "caus-se-001"
 
 
 @pytest.mark.asyncio
@@ -147,12 +197,14 @@ async def test_happy_path_decision_and_approval(store: InMemoryEventStore):
         confidence=0.85,
         contributing_sessions=[session_id],
         executive_summary="ok",
+        correlation_id=CORRELATION,
     )
 
     await handle_application_approved(
         store,
         application_id=app_id,
         approved_amount_usd=Decimal("250000"),
+        correlation_id=CORRELATION,
     )
 
     agg = await LoanApplicationAggregate.load(store, app_id)
@@ -222,7 +274,7 @@ async def test_second_credit_requires_human_override(store: InMemoryEventStore):
     )
     await _loan_pipeline_to_decision_ready(store, app_id, session_id)
 
-    with pytest.raises(DomainError, match="Second CreditAnalysisCompleted"):
+    with pytest.raises(DomainError, match="second CreditAnalysisCompleted"):
         await handle_credit_analysis_completed(
             store,
             application_id=app_id,
@@ -290,6 +342,19 @@ async def test_compliance_aggregate_tracks_rules(store: InMemoryEventStore):
         application_id=app_id,
         session_id=session_id,
         rules_to_evaluate=["R1"],
+        correlation_id=CORRELATION,
     )
     c = await ComplianceRecordAggregate.load(store, app_id)
     assert "R1" in c.passed_rules
+
+
+@pytest.mark.asyncio
+async def test_aggregate_version_tracks_stream_position(store: InMemoryEventStore):
+    """Aggregate.version reflects the latest stream version after load()."""
+    app_id = "APEX-DOM-008"
+    session_id = "sess-credit-008"
+    await _loan_pipeline_to_decision_ready(store, app_id, session_id)
+    agg = await LoanApplicationAggregate.load(store, app_id)
+    loan_ver = await store.stream_version(loan_stream_id(app_id))
+    assert agg.version == loan_ver
+    assert agg.version > 0

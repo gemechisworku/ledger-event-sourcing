@@ -1,5 +1,12 @@
 """
 Command handlers — load → validate → emit → append.
+
+Every handler:
+  1. Loads the relevant aggregate(s)
+  2. Calls guard methods on the aggregate for business-rule validation
+  3. Constructs domain event(s)
+  4. Appends via store.append() with expected_version from aggregate.version
+  5. Threads correlation_id / causation_id into event metadata
 """
 
 from __future__ import annotations
@@ -40,25 +47,6 @@ from src.schema.events import (
 )
 
 
-def _override_allows_second_credit_analysis(loan_events: list[dict], credit_events: list[dict]) -> bool:
-    """Rule 3: second credit completion requires HumanReviewCompleted(override=True) after first completion."""
-    completions = sorted(
-        [e for e in credit_events if e["event_type"] == "CreditAnalysisCompleted"],
-        key=lambda e: e["global_position"],
-    )
-    if len(completions) < 1:
-        return True
-    first_pos = completions[0]["global_position"]
-    for e in loan_events:
-        if e["event_type"] != "HumanReviewCompleted":
-            continue
-        if not e.get("payload", {}).get("override"):
-            continue
-        if e["global_position"] > first_pos:
-            return True
-    return False
-
-
 async def handle_submit_application(
     store: Any,
     *,
@@ -71,6 +59,8 @@ async def handle_submit_application(
     contact_email: str,
     contact_name: str,
     application_reference: str,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     sid = loan_stream_id(application_id)
     ev = ApplicationSubmitted(
@@ -85,7 +75,13 @@ async def handle_submit_application(
         submitted_at=datetime.now(timezone.utc),
         application_reference=application_reference,
     )
-    await store.append(sid, [ev.to_store_dict()], expected_version=await store.stream_version(sid))
+    await store.append(
+        sid,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(sid),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_start_agent_session(
@@ -99,6 +95,8 @@ async def handle_start_agent_session(
     langgraph_graph_version: str = "1.0",
     context_source: str = "event_replay",
     context_token_count: int = 0,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     stream = agent_stream_id(agent_type.value, session_id)
     ev = AgentSessionStarted(
@@ -112,7 +110,13 @@ async def handle_start_agent_session(
         context_token_count=context_token_count,
         started_at=datetime.now(timezone.utc),
     )
-    await store.append(stream, [ev.to_store_dict()], expected_version=await store.stream_version(stream))
+    await store.append(
+        stream,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(stream),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_credit_analysis_completed(
@@ -125,14 +129,11 @@ async def handle_credit_analysis_completed(
     model_deployment_id: str = "prod",
     input_data_hash: str = "hash",
     analysis_duration_ms: int = 100,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
-    loan_events = await store.load_stream(loan_stream_id(application_id))
-    credit_events = await store.load_stream(credit_stream_id(application_id))
-    if len([e for e in credit_events if e["event_type"] == "CreditAnalysisCompleted"]) >= 1:
-        if not _override_allows_second_credit_analysis(loan_events, credit_events):
-            raise DomainError(
-                "Second CreditAnalysisCompleted requires HumanReviewCompleted with override after first credit"
-            )
+    app = await LoanApplicationAggregate.load(store, application_id)
+    app.assert_can_append_second_credit_analysis()
 
     agent_type = AgentType.CREDIT_ANALYSIS.value
     agent = await AgentSessionAggregate.load(store, agent_type, session_id)
@@ -150,7 +151,13 @@ async def handle_credit_analysis_completed(
         completed_at=datetime.now(timezone.utc),
     )
     cs = credit_stream_id(application_id)
-    await store.append(cs, [ev.to_store_dict()], expected_version=await store.stream_version(cs))
+    await store.append(
+        cs,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(cs),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_open_credit_record(
@@ -158,6 +165,8 @@ async def handle_open_credit_record(
     *,
     application_id: str,
     applicant_id: str,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     cs = credit_stream_id(application_id)
     ev = CreditRecordOpened(
@@ -165,7 +174,13 @@ async def handle_open_credit_record(
         applicant_id=applicant_id,
         opened_at=datetime.now(timezone.utc),
     )
-    await store.append(cs, [ev.to_store_dict()], expected_version=await store.stream_version(cs))
+    await store.append(
+        cs,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(cs),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_fraud_pipeline(
@@ -173,6 +188,8 @@ async def handle_fraud_pipeline(
     *,
     application_id: str,
     session_id: str,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     fs = fraud_stream_id(application_id)
     v = await store.stream_version(fs)
@@ -187,6 +204,8 @@ async def handle_fraud_pipeline(
             ).to_store_dict()
         ],
         expected_version=v,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
     )
     v2 = await store.stream_version(fs)
     ev = FraudScreeningCompleted(
@@ -200,7 +219,13 @@ async def handle_fraud_pipeline(
         input_data_hash="fraud-hash",
         completed_at=datetime.now(timezone.utc),
     )
-    await store.append(fs, [ev.to_store_dict()], expected_version=v2)
+    await store.append(
+        fs,
+        [ev.to_store_dict()],
+        expected_version=v2,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_compliance_pipeline(
@@ -210,6 +235,8 @@ async def handle_compliance_pipeline(
     session_id: str,
     rules_to_evaluate: list[str],
     regulation_set_version: str = "2026-Q1",
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     cstream = compliance_stream_id(application_id)
     ev1 = ComplianceCheckInitiated(
@@ -219,7 +246,13 @@ async def handle_compliance_pipeline(
         rules_to_evaluate=rules_to_evaluate,
         initiated_at=datetime.now(timezone.utc),
     )
-    await store.append(cstream, [ev1.to_store_dict()], expected_version=await store.stream_version(cstream))
+    await store.append(
+        cstream,
+        [ev1.to_store_dict()],
+        expected_version=await store.stream_version(cstream),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
     pos = await store.stream_version(cstream)
     passed: list[dict] = []
     for i, rid in enumerate(rules_to_evaluate):
@@ -235,7 +268,13 @@ async def handle_compliance_pipeline(
                 evaluated_at=datetime.now(timezone.utc),
             ).to_store_dict()
         )
-    await store.append(cstream, passed, expected_version=pos)
+    await store.append(
+        cstream,
+        passed,
+        expected_version=pos,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
     pos2 = await store.stream_version(cstream)
     done = ComplianceCheckCompleted(
         application_id=application_id,
@@ -248,7 +287,13 @@ async def handle_compliance_pipeline(
         overall_verdict=ComplianceVerdict.CLEAR,
         completed_at=datetime.now(timezone.utc),
     )
-    await store.append(cstream, [done.to_store_dict()], expected_version=pos2)
+    await store.append(
+        cstream,
+        [done.to_store_dict()],
+        expected_version=pos2,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_decision_generated(
@@ -260,25 +305,30 @@ async def handle_decision_generated(
     confidence: float,
     contributing_sessions: list[str],
     executive_summary: str = "summary",
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     app = await LoanApplicationAggregate.load(store, application_id)
     app.assert_contributing_sessions_valid(contributing_sessions)
-
-    rec = recommendation.upper()
-    if confidence < 0.6 and rec != "REFER":
-        raise DomainError("confidence < 0.6 requires recommendation REFER")
+    app.assert_decision_confidence_valid(confidence, recommendation)
 
     ev = DecisionGenerated(
         application_id=application_id,
         orchestrator_session_id=orchestrator_session_id,
-        recommendation=rec,
+        recommendation=recommendation.upper(),
         confidence=confidence,
         executive_summary=executive_summary,
         contributing_sessions=contributing_sessions,
         generated_at=datetime.now(timezone.utc),
     )
     ls = loan_stream_id(application_id)
-    await store.append(ls, [ev.to_store_dict()], expected_version=await store.stream_version(ls))
+    await store.append(
+        ls,
+        [ev.to_store_dict()],
+        expected_version=app.version,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_human_review_completed(
@@ -290,6 +340,8 @@ async def handle_human_review_completed(
     original_recommendation: str,
     final_decision: str,
     override_reason: str | None,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     ev = HumanReviewCompleted(
         application_id=application_id,
@@ -301,7 +353,13 @@ async def handle_human_review_completed(
         reviewed_at=datetime.now(timezone.utc),
     )
     ls = loan_stream_id(application_id)
-    await store.append(ls, [ev.to_store_dict()], expected_version=await store.stream_version(ls))
+    await store.append(
+        ls,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(ls),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def handle_application_approved(
@@ -313,6 +371,8 @@ async def handle_application_approved(
     term_months: int = 60,
     approved_by: str = "system",
     effective_date: str = "2026-04-01",
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     comp = await ComplianceRecordAggregate.load(store, application_id)
     comp.assert_all_required_passed()
@@ -327,7 +387,13 @@ async def handle_application_approved(
         approved_at=datetime.now(timezone.utc),
     )
     ls = loan_stream_id(application_id)
-    await store.append(ls, [ev.to_store_dict()], expected_version=await store.stream_version(ls))
+    await store.append(
+        ls,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(ls),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
 
 
 async def append_loan_event(store: Any, application_id: str, event_dict: dict) -> None:
@@ -351,6 +417,8 @@ async def handle_decision_requested(
     *,
     application_id: str,
     triggered_by_event_id: str,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
 ) -> None:
     ev = DecisionRequested(
         application_id=application_id,
@@ -359,4 +427,10 @@ async def handle_decision_requested(
         triggered_by_event_id=triggered_by_event_id,
     )
     ls = loan_stream_id(application_id)
-    await store.append(ls, [ev.to_store_dict()], expected_version=await store.stream_version(ls))
+    await store.append(
+        ls,
+        [ev.to_store_dict()],
+        expected_version=await store.stream_version(ls),
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )

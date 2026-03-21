@@ -1,4 +1,7 @@
-"""ComplianceRecord aggregate — stream `compliance-{application_id}`."""
+"""ComplianceRecord aggregate — stream `compliance-{application_id}`.
+
+Uses per-event dispatch: _apply delegates to _on_{EventType} methods.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ from typing import Any
 
 from src.domain.errors import DomainError
 from src.domain.streams import compliance_stream_id
+from src.schema.events import StoredEvent
 
 
 class ComplianceRecordAggregate:
@@ -13,7 +17,7 @@ class ComplianceRecordAggregate:
 
     def __init__(self, application_id: str) -> None:
         self.application_id = application_id
-        self.version: int = 0
+        self.version: int = -1
         self.required_rules: list[str] = []
         self.passed_rules: set[str] = set()
         self.failed_hard_block: bool = False
@@ -32,19 +36,24 @@ class ComplianceRecordAggregate:
         agg.version = await store.stream_version(agg.stream_id)
         return agg
 
-    def _apply(self, event: dict) -> None:
-        et = event["event_type"]
-        p = event.get("payload", {})
-        self.version = int(event["stream_position"])
+    def _apply(self, event: StoredEvent) -> None:
+        handler = getattr(self, f"_on_{event.event_type}", None)
+        if handler:
+            handler(event)
+        self.version = event.stream_position
 
-        if et == "ComplianceCheckInitiated":
-            self.required_rules = list(p.get("rules_to_evaluate", []))
-            self.regulation_set_version = p.get("regulation_set_version")
-        elif et == "ComplianceRulePassed":
-            self.passed_rules.add(p.get("rule_id", ""))
-        elif et == "ComplianceRuleFailed":
-            if p.get("is_hard_block"):
-                self.failed_hard_block = True
+    def _on_ComplianceCheckInitiated(self, event: StoredEvent) -> None:
+        self.required_rules = list(event.payload.get("rules_to_evaluate", []))
+        self.regulation_set_version = event.payload.get("regulation_set_version")
+
+    def _on_ComplianceRulePassed(self, event: StoredEvent) -> None:
+        self.passed_rules.add(event.payload.get("rule_id", ""))
+
+    def _on_ComplianceRuleFailed(self, event: StoredEvent) -> None:
+        if event.payload.get("is_hard_block"):
+            self.failed_hard_block = True
+
+    # ── Guards ──
 
     def assert_all_required_passed(self) -> None:
         if not self.required_rules:
