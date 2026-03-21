@@ -1,8 +1,20 @@
 # SLOs & lag
 
-Exemplar targets:
+**Source:** [`../../ref_docs/requirements.md`](../../ref_docs/requirements.md)
 
-- **ApplicationSummary:** lag &lt; 500ms under normal conditions.
-- **ComplianceAuditView:** up to ~2s lag.
+## Targets
 
-**Tests:** simulated load (e.g. 50 concurrent command handlers) — document how lag is measured (`ProjectionDaemon.get_lag` / `get_all_lags`).
+| Projection | Max lag (normal ops) |
+|------------|----------------------|
+| ApplicationSummary | **500ms** |
+| ComplianceAuditView | **2s** |
+
+## Load testing
+
+- Simulate **50 concurrent command handlers** appending events.
+- Assert projection lag stays within SLO (or document degradation).
+
+## Metrics
+
+- **`get_lag()`** per projection — ms from “latest event in store” to “last processed by this projection”.
+- Expose via daemon; surface on health resource.

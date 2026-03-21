@@ -1,11 +1,12 @@
-# Domain model (Phase 2+)
+# Domain model
 
 | Doc | Purpose |
 |-----|---------|
-| `aggregates.md` | LoanApplication, AgentSession, ComplianceRecord, AuditLedger — streams, invariants |
-| `streams-and-events.md` | Stream formats; catalogue vs `ledger/schema/events.py` |
-| `state-machines.md` | Loan application valid transitions |
-| `business-rules.md` | Six rules + where enforced (aggregate vs handler) |
-| `command-handlers.md` | Command types; load → validate → emit → append |
+| [`aggregates.md`](aggregates.md) | Four aggregates, full event catalogue table, invariants |
+| [`streams-and-events.md`](streams-and-events.md) | Stream IDs, metadata, multi-stream workflows |
+| [`state-machines.md`](state-machines.md) | Loan application states |
+| [`business-rules.md`](business-rules.md) | Six domain rules (verbatim requirements) |
+| [`command-handlers.md`](command-handlers.md) | Handler pattern + example + command list |
+| [`aggregate-reconstruction.md`](aggregate-reconstruction.md) | `load` / `_apply` / `_on_*` pattern |
 
 **Code:** `ledger/domain/aggregates/`, `ledger/agents/base_agent.py`, `ledger/registry/client.py`.

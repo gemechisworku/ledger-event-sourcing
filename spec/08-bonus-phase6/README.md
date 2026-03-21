@@ -1,8 +1,8 @@
-# Optional extensions — Phase 6
+# Optional extensions (Phase 6)
 
 | Doc | Purpose |
 |-----|---------|
-| `what-if.md` | Counterfactual projector |
-| `regulatory-package.md` | Regulatory examination export |
+| [`what-if.md`](what-if.md) | `run_what_if`, causal filtering, demo scenario |
+| [`regulatory-package.md`](regulatory-package.md) | `generate_regulatory_package` contents |
 
-Implement after Phases 1–5 are solid.
+Implement after Phases 1–5 are production-ready.

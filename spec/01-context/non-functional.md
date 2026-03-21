@@ -1,7 +1,24 @@
 # Non-functional constraints
 
-- **Database:** PostgreSQL — reference schema: `events`, `event_streams`, `projection_checkpoints`, `outbox` (see `03-event-store/schema-contract.md`).
-- **Python:** async I/O; `uv` + `asyncpg` per `pyproject.toml`.
-- **SLOs:** e.g. ApplicationSummary lag &lt; 500ms; ComplianceAuditView up to ~2s — refine in `05-projections-cqrs/slo-and-lag.md`.
+## Platform
 
-Add deployment notes (Docker ports, `.env`) when they affect design.
+- **DB:** PostgreSQL — schema in [`../03-event-store/schema-contract.md`](../03-event-store/schema-contract.md).
+- **Runtime:** Python 3.10+, async (`asyncpg`), `uv` per `pyproject.toml`.
+
+## SLOs (from requirements)
+
+| Projection | Lag target (normal) |
+|------------|---------------------|
+| ApplicationSummary | &lt; 500ms |
+| ComplianceAuditView | up to ~2s |
+
+- Daemon must expose **per-projection lag** (`get_lag` / `get_all_lags`).
+- Tests should stress **50 concurrent command handlers** and assert lag stays within bounds where feasible.
+
+## Realtime / ops (optional later)
+
+- Requirements mention PostgreSQL `LISTEN/NOTIFY` for subscriptions — not mandatory for MVP if polling daemon is used.
+
+## Documentation
+
+- **Every schema column** justified in `DESIGN.md` (per requirements).

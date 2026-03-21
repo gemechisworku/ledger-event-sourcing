@@ -1,13 +1,28 @@
 # Vision & scenario
 
-**Source:** [`../../ref_docs/requirements.md`](../../ref_docs/requirements.md) — product vision, Apex scenario, four aggregates, week-standard demo.
+**Canonical source:** [`../../ref_docs/requirements.md`](../../ref_docs/requirements.md)
 
-## Outcomes
+## Product vision
 
-- Immutable, append-only **audit trail** for AI and human decisions.
-- **Event sourcing** as source of truth (not fire-and-forget messaging).
-- Demonstrable **full decision history** for an application including integrity and temporal views.
+The Ledger is **append-only, shared memory** for multi-agent systems: not fire-and-forget messaging, but **events as source of truth** so decisions are auditable, replayable, and queryable in time.
 
-## Week-standard demo
+## Apex Financial Services — scenario
 
-End-to-end history for application **X** in under 60 seconds — checklist in `09-documentation/documentation-checklist.md` if you record demos internally.
+- **Agents:** CreditAnalysis, FraudDetection, Compliance, DecisionOrchestrator — plus **human loan officers** for binding decisions.
+- **Regulatory bar:** Immutable audit trail; reconstruct state at any point; temporal / what-if style questions; **tamper detection** on the audit trail.
+- **Architecture principle:** Auditability is **built in**, not bolted on after the fact.
+
+## Operational demo standard
+
+End-to-end: *“Complete decision history for application X”* — all agent actions, compliance, human review, causal links, temporal query at any lifecycle point, cryptographic integrity — **under ~60 seconds** for ops/demo use.
+
+## Four aggregates (summary)
+
+| Aggregate | Stream pattern | Role |
+|-----------|----------------|------|
+| LoanApplication | `loan-{application_id}` | Application lifecycle |
+| AgentSession | `agent-{agent_id}-{session_id}` | Session-scoped agent actions, Gas Town |
+| ComplianceRecord | `compliance-{application_id}` | Rules, regulation versions, verdicts |
+| AuditLedger | `audit-{entity_type}-{entity_id}` | Cross-cutting audit, correlation chains |
+
+Full invariant table: [`../04-domain-model/aggregates.md`](../04-domain-model/aggregates.md).
