@@ -122,6 +122,34 @@ class LoanApplicationAggregate:
 
     # ── Guards ───────────────────────────────────────────────────────────────
 
+    def assert_not_already_submitted(self) -> None:
+        if self.state is not None:
+            raise DomainError(
+                f"Application already submitted (state={self.state!r})"
+            )
+
+    def assert_pending_human_review(self) -> None:
+        if self.state != ApplicationState.PENDING_HUMAN_REVIEW:
+            raise DomainError(
+                f"HumanReviewCompleted requires PENDING_HUMAN_REVIEW state, got {self.state!r}"
+            )
+
+    def assert_can_request_decision(self) -> None:
+        allowed = {
+            ApplicationState.COMPLIANCE_CHECK_REQUESTED,
+            ApplicationState.COMPLIANCE_CHECK_COMPLETE,
+        }
+        if self.state not in allowed:
+            raise DomainError(
+                f"DecisionRequested requires compliance stage, got {self.state!r}"
+            )
+
+    def assert_can_approve(self) -> None:
+        if self.state != ApplicationState.PENDING_DECISION:
+            raise DomainError(
+                f"ApplicationApproved requires PENDING_DECISION, got {self.state!r}"
+            )
+
     def assert_can_append_second_credit_analysis(self) -> None:
         if self.credit_analysis_completed_count >= 1 and not self.human_review_superseded_credit:
             raise DomainError(

@@ -283,12 +283,21 @@ async def test_second_credit_requires_human_override(store: InMemoryEventStore):
             model_version="credit-v2",
         )
 
+    await handle_decision_generated(
+        store,
+        application_id=app_id,
+        orchestrator_session_id="orch-005",
+        recommendation="REFER",
+        confidence=0.5,
+        contributing_sessions=[session_id],
+    )
+
     await handle_human_review_completed(
         store,
         application_id=app_id,
         reviewer_id="u1",
         override=True,
-        original_recommendation="APPROVE",
+        original_recommendation="REFER",
         final_decision="APPROVE",
         override_reason="re-run credit",
     )

@@ -63,6 +63,10 @@ class AgentSessionAggregate:
 
     # ── Guards ──
 
+    def assert_not_already_started(self) -> None:
+        if self._started:
+            raise DomainError("Agent session already started")
+
     def assert_context_loaded(self) -> None:
         if not self._started:
             raise DomainError("Agent session has no AgentSessionStarted (context not loaded)")

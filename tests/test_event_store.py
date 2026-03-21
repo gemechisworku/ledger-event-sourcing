@@ -101,9 +101,24 @@ async def test_concurrent_double_append_exactly_one_succeeds(store):
     assert len(successes) == 1, f"Expected exactly 1 success, got {len(successes)}"
     assert len(errors) == 1
 
+    winning_positions = successes[0]
+    assert winning_positions == [2], "Winner must get stream_position 2"
+
+    occ_err = errors[0]
+    assert occ_err.stream_id == "test-concurrent-001"
+    assert occ_err.expected == 1, "Loser expected version 1"
+    assert occ_err.actual == 2, "Actual version is 2 after winner committed"
+
+    final_version = await store.stream_version("test-concurrent-001")
+    assert final_version == 2, "Stream version must be 2 after Init + 1 winning append"
+
     stream_events = await store.load_stream("test-concurrent-001")
     assert len(stream_events) == 2, "Init + exactly one winning append"
+    assert all(isinstance(e, StoredEvent) for e in stream_events)
+    assert stream_events[0].stream_position == 1
+    assert stream_events[0].event_type == "Init"
     assert stream_events[1].stream_position == 2
+    assert stream_events[1].event_type in ("A", "B"), "Winner is one of the two contenders"
 
 @pytest.mark.asyncio
 async def test_load_stream_ordered(store):

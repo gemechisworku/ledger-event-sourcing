@@ -1,12 +1,12 @@
 """
 Command handlers — load → validate → emit → append.
 
-Every handler:
-  1. Loads the relevant aggregate(s)
-  2. Calls guard methods on the aggregate for business-rule validation
-  3. Constructs domain event(s)
-  4. Appends via store.append() with expected_version from aggregate.version
-  5. Threads correlation_id / causation_id into event metadata
+Every handler follows the same disciplined pattern:
+  1. Load the relevant aggregate(s) from the store
+  2. Call guard methods on the aggregate for business-rule validation
+  3. Construct domain event(s)
+  4. Append via store.append() with expected_version from aggregate.version
+  5. Thread correlation_id / causation_id into event metadata
 """
 
 from __future__ import annotations
@@ -62,7 +62,9 @@ async def handle_submit_application(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
-    sid = loan_stream_id(application_id)
+    app = await LoanApplicationAggregate.load(store, application_id)
+    app.assert_not_already_submitted()
+
     ev = ApplicationSubmitted(
         application_id=application_id,
         applicant_id=applicant_id,
@@ -76,9 +78,9 @@ async def handle_submit_application(
         application_reference=application_reference,
     )
     await store.append(
-        sid,
+        loan_stream_id(application_id),
         [ev.to_store_dict()],
-        expected_version=await store.stream_version(sid),
+        expected_version=app.version,
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
@@ -98,7 +100,9 @@ async def handle_start_agent_session(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
-    stream = agent_stream_id(agent_type.value, session_id)
+    agent = await AgentSessionAggregate.load(store, agent_type.value, session_id)
+    agent.assert_not_already_started()
+
     ev = AgentSessionStarted(
         session_id=session_id,
         agent_type=agent_type,
@@ -111,9 +115,9 @@ async def handle_start_agent_session(
         started_at=datetime.now(timezone.utc),
     )
     await store.append(
-        stream,
+        agent.stream_id,
         [ev.to_store_dict()],
-        expected_version=await store.stream_version(stream),
+        expected_version=agent.version,
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
@@ -135,8 +139,7 @@ async def handle_credit_analysis_completed(
     app = await LoanApplicationAggregate.load(store, application_id)
     app.assert_can_append_second_credit_analysis()
 
-    agent_type = AgentType.CREDIT_ANALYSIS.value
-    agent = await AgentSessionAggregate.load(store, agent_type, session_id)
+    agent = await AgentSessionAggregate.load(store, AgentType.CREDIT_ANALYSIS.value, session_id)
     agent.assert_context_loaded()
     agent.assert_model_version_current(model_version)
 
@@ -168,6 +171,10 @@ async def handle_open_credit_record(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
+    app = await LoanApplicationAggregate.load(store, application_id)
+    if app.state is None:
+        raise DomainError("Cannot open credit record for non-existent application")
+
     cs = credit_stream_id(application_id)
     ev = CreditRecordOpened(
         application_id=application_id,
@@ -191,6 +198,10 @@ async def handle_fraud_pipeline(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
+    app = await LoanApplicationAggregate.load(store, application_id)
+    if app.state is None:
+        raise DomainError("Cannot run fraud pipeline for non-existent application")
+
     fs = fraud_stream_id(application_id)
     v = await store.stream_version(fs)
     await store.append(
@@ -238,6 +249,8 @@ async def handle_compliance_pipeline(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
+    comp = await ComplianceRecordAggregate.load(store, application_id)
+
     cstream = compliance_stream_id(application_id)
     ev1 = ComplianceCheckInitiated(
         application_id=application_id,
@@ -249,7 +262,7 @@ async def handle_compliance_pipeline(
     await store.append(
         cstream,
         [ev1.to_store_dict()],
-        expected_version=await store.stream_version(cstream),
+        expected_version=comp.version,
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
@@ -321,9 +334,8 @@ async def handle_decision_generated(
         contributing_sessions=contributing_sessions,
         generated_at=datetime.now(timezone.utc),
     )
-    ls = loan_stream_id(application_id)
     await store.append(
-        ls,
+        loan_stream_id(application_id),
         [ev.to_store_dict()],
         expected_version=app.version,
         correlation_id=correlation_id,
@@ -343,6 +355,9 @@ async def handle_human_review_completed(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
+    app = await LoanApplicationAggregate.load(store, application_id)
+    app.assert_pending_human_review()
+
     ev = HumanReviewCompleted(
         application_id=application_id,
         reviewer_id=reviewer_id,
@@ -352,11 +367,10 @@ async def handle_human_review_completed(
         override_reason=override_reason,
         reviewed_at=datetime.now(timezone.utc),
     )
-    ls = loan_stream_id(application_id)
     await store.append(
-        ls,
+        loan_stream_id(application_id),
         [ev.to_store_dict()],
-        expected_version=await store.stream_version(ls),
+        expected_version=app.version,
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
@@ -374,6 +388,9 @@ async def handle_application_approved(
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
+    app = await LoanApplicationAggregate.load(store, application_id)
+    app.assert_can_approve()
+
     comp = await ComplianceRecordAggregate.load(store, application_id)
     comp.assert_all_required_passed()
 
@@ -386,11 +403,36 @@ async def handle_application_approved(
         effective_date=effective_date,
         approved_at=datetime.now(timezone.utc),
     )
-    ls = loan_stream_id(application_id)
     await store.append(
-        ls,
+        loan_stream_id(application_id),
         [ev.to_store_dict()],
-        expected_version=await store.stream_version(ls),
+        expected_version=app.version,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
+
+
+async def handle_decision_requested(
+    store: Any,
+    *,
+    application_id: str,
+    triggered_by_event_id: str,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
+) -> None:
+    app = await LoanApplicationAggregate.load(store, application_id)
+    app.assert_can_request_decision()
+
+    ev = DecisionRequested(
+        application_id=application_id,
+        requested_at=datetime.now(timezone.utc),
+        all_analyses_complete=True,
+        triggered_by_event_id=triggered_by_event_id,
+    )
+    await store.append(
+        loan_stream_id(application_id),
+        [ev.to_store_dict()],
+        expected_version=app.version,
         correlation_id=correlation_id,
         causation_id=causation_id,
     )
@@ -410,27 +452,3 @@ async def append_credit_event(store: Any, application_id: str, event_dict: dict)
 async def append_fraud_event(store: Any, application_id: str, event_dict: dict) -> None:
     fs = fraud_stream_id(application_id)
     await store.append(fs, [event_dict], expected_version=await store.stream_version(fs))
-
-
-async def handle_decision_requested(
-    store: Any,
-    *,
-    application_id: str,
-    triggered_by_event_id: str,
-    correlation_id: str | None = None,
-    causation_id: str | None = None,
-) -> None:
-    ev = DecisionRequested(
-        application_id=application_id,
-        requested_at=datetime.now(timezone.utc),
-        all_analyses_complete=True,
-        triggered_by_event_id=triggered_by_event_id,
-    )
-    ls = loan_stream_id(application_id)
-    await store.append(
-        ls,
-        [ev.to_store_dict()],
-        expected_version=await store.stream_version(ls),
-        correlation_id=correlation_id,
-        causation_id=causation_id,
-    )

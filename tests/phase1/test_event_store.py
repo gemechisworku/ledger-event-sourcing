@@ -63,17 +63,35 @@ async def test_concurrent_double_append_exactly_one_succeeds():
     await store.append("s", [_ev("Base")], expected_version=-1)
 
     results = []
-    async def attempt():
+    async def attempt(label: str):
         try:
-            await store.append("s", [_ev("Concurrent")], expected_version=0)
-            results.append("success")
-        except OptimisticConcurrencyError:
-            results.append("occ")
+            pos = await store.append("s", [_ev(label)], expected_version=0)
+            results.append(("success", label, pos))
+        except OptimisticConcurrencyError as e:
+            results.append(("occ", label, e))
 
-    await asyncio.gather(attempt(), attempt())
-    assert results.count("success") == 1, "Exactly one concurrent append must succeed"
-    assert results.count("occ") == 1
+    await asyncio.gather(attempt("A"), attempt("B"))
+    wins = [r for r in results if r[0] == "success"]
+    losses = [r for r in results if r[0] == "occ"]
+    assert len(wins) == 1, "Exactly one concurrent append must succeed"
+    assert len(losses) == 1
+
+    _, winner_label, winner_positions = wins[0]
+    assert winner_positions == [1], "Winner must get stream_position 1 (0-based: Base=0, next=1)"
+
+    _, _, occ_err = losses[0]
+    assert occ_err.stream_id == "s"
+    assert occ_err.expected == 0, "Loser expected version 0"
+    assert occ_err.actual == 1, "Actual version is 1 after winner committed"
+
     assert await store.stream_version("s") == 1
+
+    stream_events = await store.load_stream("s")
+    assert len(stream_events) == 2, "Base + exactly one winning append"
+    assert stream_events[0].stream_position == 0
+    assert stream_events[0].event_type == "Base"
+    assert stream_events[1].stream_position == 1
+    assert stream_events[1].event_type in ("A", "B"), "Winner is one of the two contenders"
 
 @pytest.mark.asyncio
 async def test_load_stream_returns_events_in_order():
