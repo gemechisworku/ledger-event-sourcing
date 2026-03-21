@@ -84,7 +84,7 @@ Design and module specs live under [`spec/`](spec/).
 ```bash
 uv run pytest tests/test_schema_and_generator.py -v  # Phase 0
 uv run pytest tests/test_event_store.py tests/test_applicant_registry_client.py -v  # Phase 1
-uv run pytest tests/test_domain.py -v               # Phase 2
+uv run pytest tests/test_domain.py -v               # Phase 2 (domain; InMemory, no Postgres)
 uv run pytest tests/test_narratives.py -v           # Phase 3
 uv run pytest tests/test_projections.py -v          # Phase 4
 uv run pytest tests/test_mcp.py -v                  # Phase 5

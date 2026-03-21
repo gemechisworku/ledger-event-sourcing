@@ -52,11 +52,11 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 2.1 | `LoanApplication` aggregate | [`04-domain-model/aggregate-reconstruction.md`](04-domain-model/aggregate-reconstruction.md), [`state-machines.md`](04-domain-model/state-machines.md), [`business-rules.md`](04-domain-model/business-rules.md) | State + rules enforced in domain | [ ] |
-| 2.2 | `AgentSession` aggregate | [`business-rules.md`](04-domain-model/business-rules.md) rule 2 (Gas Town), rule 3 | Context-before-decision | [ ] |
-| 2.3 | `ComplianceRecord` / `AuditLedger` | [`04-domain-model/aggregates.md`](04-domain-model/aggregates.md) | Streams `compliance-`, `audit-` | [ ] |
-| 2.4 | Command handlers | [`04-domain-model/command-handlers.md`](04-domain-model/command-handlers.md) | load → validate → emit → append | [ ] |
-| 2.5 | Gate | — | `uv run pytest tests/test_domain.py -v` | [ ] |
+| 2.1 | `LoanApplication` aggregate | [`04-domain-model/aggregate-reconstruction.md`](04-domain-model/aggregate-reconstruction.md), [`state-machines.md`](04-domain-model/state-machines.md), [`business-rules.md`](04-domain-model/business-rules.md) | State + rules enforced in domain | [x] |
+| 2.2 | `AgentSession` aggregate | [`business-rules.md`](04-domain-model/business-rules.md) rule 2 (Gas Town), rule 3 | Context-before-decision | [x] |
+| 2.3 | `ComplianceRecord` / `AuditLedger` | [`04-domain-model/aggregates.md`](04-domain-model/aggregates.md) | Streams `compliance-`, `audit-` | [x] |
+| 2.4 | Command handlers | [`04-domain-model/command-handlers.md`](04-domain-model/command-handlers.md) | load → validate → emit → append | [x] |
+| 2.5 | Gate | — | `uv run pytest tests/test_domain.py -v` | [x] |
 
 ---
 
@@ -133,6 +133,7 @@ _Add a row when you complete a phase or merge a significant chunk._
 | 2026-03-19 | **Phase 0 complete:** `uv sync`; `pytest tests/test_schema_and_generator.py` **10 passed**; added root [`DOMAIN_NOTES.md`](../DOMAIN_NOTES.md) (six questions). Postgres not required for Phase 0 gate. |
 | 2026-03-19 | **Phase 1 (EventStore):** `ledger/schema.sql` + PostgreSQL `EventStore` (append OCC, outbox, load_stream, load_all, checkpoints). `tests/test_event_store.py` vs Docker Postgres; integration tests **skip** if DB unreachable. `tests/phase1/test_event_store.py` **11 passed** (InMemory). |
 | 2026-03-19 | **Phase 1 complete (1.5):** `ApplicantRegistryClient` implemented in `ledger/registry/client.py`; shared DDL in `ledger/registry/schema.py` (used by `datagen/generate_all.py`). `tests/test_applicant_registry_client.py` **6 passed** vs Postgres. Event store integration tests also accept `APPLICANT_REGISTRY_URL` as DB fallback. |
+| 2026-03-21 | **Phase 2 complete:** `ledger/domain/aggregates/*` (LoanApplication, AgentSession, ComplianceRecord, AuditLedger), `ledger/domain/handlers.py`, `ledger/domain/streams.py`. Business rules: Gas Town (first event `AgentSessionStarted`), confidence floor REFER, contributing sessions, second credit + human override, compliance before approval. Gate: `pytest tests/test_domain.py` **8 passed** (InMemory). |
 
 ---
 
