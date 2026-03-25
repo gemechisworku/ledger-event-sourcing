@@ -1,11 +1,13 @@
+import { useQuery } from '@tanstack/react-query'
 import { Database, Layers, Loader2, Search } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { browseStream, findUpcastableEvent, upcastCompare } from '@/lib/api'
+import { Label } from '@/components/ui/label'
+import { browseStream, findUpcastableEvent, listApplications, upcastCompare } from '@/lib/api'
 
 function JsonBlock({ value, maxH = '24rem' }: { value: unknown; maxH?: string }) {
   return (
@@ -28,7 +30,29 @@ type StreamEvent = {
   payload: Record<string, unknown>
 }
 
+const PREFIXES = ['loan', 'credit', 'fraud', 'compliance', 'decision'] as const
+
 export function EventInspectorPage() {
+  const appsQ = useQuery({
+    queryKey: ['applications-list'],
+    queryFn: () => listApplications({ limit: 200 }),
+    staleTime: 30_000,
+  })
+  const apps = (appsQ.data?.applications ?? []).filter((a) => a.state !== 'LOCAL')
+
+  const streamOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = []
+    for (const app of apps) {
+      for (const prefix of PREFIXES) {
+        opts.push({
+          value: `${prefix}-${app.application_id}`,
+          label: `${prefix}-${app.application_id}`,
+        })
+      }
+    }
+    return opts
+  }, [apps])
+
   // ── Stream browser ──
   const [streamId, setStreamId] = useState('')
   const [streamResult, setStreamResult] = useState<Record<string, unknown> | null>(null)
@@ -36,12 +60,20 @@ export function EventInspectorPage() {
   const [streamErr, setStreamErr] = useState<string | null>(null)
 
   const handleBrowse = useCallback(async () => {
-    if (!streamId.trim()) { setStreamErr('Enter a stream_id'); return }
-    setStreamLoading(true); setStreamErr(null); setStreamResult(null)
+    if (!streamId.trim()) {
+      setStreamErr('Enter a stream_id')
+      return
+    }
+    setStreamLoading(true)
+    setStreamErr(null)
+    setStreamResult(null)
     try {
       setStreamResult(await browseStream(streamId.trim()))
-    } catch (e) { setStreamErr((e as Error).message) }
-    finally { setStreamLoading(false) }
+    } catch (e) {
+      setStreamErr((e as Error).message)
+    } finally {
+      setStreamLoading(false)
+    }
   }, [streamId])
 
   const streamEvents = (streamResult as { events?: StreamEvent[] })?.events ?? []
@@ -53,7 +85,9 @@ export function EventInspectorPage() {
   const [upcastErr, setUpcastErr] = useState<string | null>(null)
 
   const handleFindUpcastable = useCallback(async () => {
-    setUpcastLoading(true); setUpcastErr(null); setUpcastResult(null)
+    setUpcastLoading(true)
+    setUpcastErr(null)
+    setUpcastResult(null)
     try {
       const r = await findUpcastableEvent()
       if ((r as { found?: boolean }).found && (r as { event_id?: string }).event_id) {
@@ -61,19 +95,32 @@ export function EventInspectorPage() {
         setUpcastId(eid)
         setUpcastResult(await upcastCompare(eid))
       } else {
-        setUpcastErr((r as { hint?: string }).hint ?? 'No v1 events found. Run a pipeline first.')
+        setUpcastErr(
+          (r as { hint?: string }).hint ?? 'No v1 events found. Run a pipeline first.',
+        )
       }
-    } catch (e) { setUpcastErr((e as Error).message) }
-    finally { setUpcastLoading(false) }
+    } catch (e) {
+      setUpcastErr((e as Error).message)
+    } finally {
+      setUpcastLoading(false)
+    }
   }, [])
 
   const handleUpcastCompare = useCallback(async () => {
-    if (!upcastId.trim()) { setUpcastErr('Enter an event_id or click "Find v1 event"'); return }
-    setUpcastLoading(true); setUpcastErr(null); setUpcastResult(null)
+    if (!upcastId.trim()) {
+      setUpcastErr('Enter an event_id or click "Find v1 event"')
+      return
+    }
+    setUpcastLoading(true)
+    setUpcastErr(null)
+    setUpcastResult(null)
     try {
       setUpcastResult(await upcastCompare(upcastId.trim()))
-    } catch (e) { setUpcastErr((e as Error).message) }
-    finally { setUpcastLoading(false) }
+    } catch (e) {
+      setUpcastErr((e as Error).message)
+    } finally {
+      setUpcastLoading(false)
+    }
   }, [upcastId])
 
   const analysis = (upcastResult as { analysis?: Record<string, unknown> })?.analysis
@@ -86,11 +133,13 @@ export function EventInspectorPage() {
         <div className="flex items-start gap-3">
           <Database className="mt-1 h-8 w-8 shrink-0 text-primary" />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-primary">Infrastructure</p>
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary">
+              Infrastructure
+            </p>
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Event Inspector</h1>
             <p className="mt-2 max-w-2xl text-muted-foreground">
-              Browse any event stream by stream_id, inspect individual events, and compare
-              upcasted read-path results with the raw persisted payload to verify immutability.
+              Browse any event stream by stream_id, inspect individual events, and compare upcasted
+              read-path results with the raw persisted payload to verify immutability.
             </p>
           </div>
         </div>
@@ -104,23 +153,49 @@ export function EventInspectorPage() {
             <CardTitle>Browse stream</CardTitle>
           </div>
           <CardDescription>
-            Enter a stream_id (e.g. <code className="text-xs">loan-APEX-0007</code>,{' '}
-            <code className="text-xs">credit-APEX-0007</code>,{' '}
-            <code className="text-xs">fraud-APEX-0007</code>,{' '}
-            <code className="text-xs">compliance-APEX-0007</code>) and view all events.
+            Pick a stream from the dropdown or type a custom stream_id. Streams follow the pattern{' '}
+            <code className="text-xs">loan-APP_ID</code>,{' '}
+            <code className="text-xs">credit-APP_ID</code>, etc.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <Label>Stream</Label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              value={streamOptions.some((o) => o.value === streamId) ? streamId : ''}
+              onChange={(e) => {
+                if (e.target.value) setStreamId(e.target.value)
+              }}
+            >
+              <option value="">Select a known stream…</option>
+              {PREFIXES.map((prefix) => (
+                <optgroup key={prefix} label={prefix}>
+                  {apps.map((a) => (
+                    <option key={`${prefix}-${a.application_id}`} value={`${prefix}-${a.application_id}`}>
+                      {prefix}-{a.application_id}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
           <div className="flex gap-2">
             <Input
               value={streamId}
               onChange={(e) => setStreamId(e.target.value)}
-              placeholder="loan-APEX-0007"
+              placeholder="Or type stream_id manually"
               className="flex-1"
-              onKeyDown={(e) => { if (e.key === 'Enter') handleBrowse() }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleBrowse()
+              }}
             />
             <Button onClick={handleBrowse} disabled={streamLoading}>
-              {streamLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+              {streamLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="mr-2 h-4 w-4" />
+              )}
               Load
             </Button>
           </div>
@@ -139,7 +214,9 @@ export function EventInspectorPage() {
                         #{ev.stream_position}
                       </Badge>
                       <span className="font-medium">{ev.event_type}</span>
-                      <Badge variant="secondary" className="text-[10px]">v{ev.event_version}</Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        v{ev.event_version}
+                      </Badge>
                       <span className="ml-auto text-xs text-muted-foreground">
                         {ev.recorded_at?.slice(0, 19) ?? '—'}
                       </span>
@@ -176,9 +253,9 @@ export function EventInspectorPage() {
             <CardTitle>Upcast vs raw comparison</CardTitle>
           </div>
           <CardDescription>
-            Compare how the store delivers an event via the read path (with upcasters applied)
-            vs the immutable payload persisted in the database. Fields added by upcasters are
-            highlighted. The raw bytes on disk never change.
+            Compare how the store delivers an event via the read path (with upcasters applied) vs the
+            immutable payload persisted in the database. Fields added by upcasters are highlighted.
+            The raw bytes on disk never change.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -203,15 +280,22 @@ export function EventInspectorPage() {
           {analysis ? (
             <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
               <p>
-                <strong>Stored version:</strong> v{String((analysis as Record<string, unknown>).stored_version)} →{' '}
-                <strong>Read path version:</strong> v{String((analysis as Record<string, unknown>).read_path_version)}
+                <strong>Stored version:</strong> v
+                {String((analysis as Record<string, unknown>).stored_version)} →{' '}
+                <strong>Read path version:</strong> v
+                {String((analysis as Record<string, unknown>).read_path_version)}
               </p>
               {Array.isArray((analysis as Record<string, unknown>).fields_added_by_upcast) &&
-              ((analysis as { fields_added_by_upcast: string[] }).fields_added_by_upcast).length > 0 ? (
+              ((analysis as { fields_added_by_upcast: string[] }).fields_added_by_upcast).length >
+                0 ? (
                 <p className="mt-1">
                   <strong>Fields added by upcast:</strong>{' '}
-                  {((analysis as { fields_added_by_upcast: string[] }).fields_added_by_upcast).map((f) => (
-                    <Badge key={f} variant="secondary" className="mr-1 text-[10px]">{f}</Badge>
+                  {(
+                    (analysis as { fields_added_by_upcast: string[] }).fields_added_by_upcast
+                  ).map((f) => (
+                    <Badge key={f} variant="secondary" className="mr-1 text-[10px]">
+                      {f}
+                    </Badge>
                   ))}
                 </p>
               ) : null}
@@ -230,7 +314,8 @@ export function EventInspectorPage() {
               </div>
               <div>
                 <p className="mb-1 text-sm font-semibold">
-                  Upcasted read path (v{String((upcastedEv as Record<string, unknown>).event_version)})
+                  Upcasted read path (v
+                  {String((upcastedEv as Record<string, unknown>).event_version)})
                 </p>
                 <JsonBlock value={upcastedEv} maxH="28rem" />
               </div>

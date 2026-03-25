@@ -1,6 +1,7 @@
 """
-Agent session management — run individual agents, concurrent runs,
-crash simulation, and Gas Town recovery.
+Agent session management — run agents with live SSE logging,
+dual parallel runs for OCC demonstration, interruptible runs for
+Gas Town recovery.
 """
 from __future__ import annotations
 
@@ -13,13 +14,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from src.api.services.jobs import JobRegistry
 from src.api.services.pipeline import build_registry_client
 from src.event_store import OptimisticConcurrencyError
 from src.gas_town import reconstruct_agent_context
 from src.schema.events import AgentType
 
 router = APIRouter()
-
 
 STAGE_TO_AGENT_TYPE = {
     "document": AgentType.DOCUMENT_PROCESSING.value,
@@ -37,16 +38,7 @@ def _require_pg(request: Request) -> Any:
     return store
 
 
-def _ensure_submitted(loan_events: list) -> None:
-    if not any(e.event_type == "ApplicationSubmitted" for e in loan_events):
-        raise HTTPException(
-            400,
-            "Application has no ApplicationSubmitted event. Create it first via POST /v1/applications.",
-        )
-
-
-def _build_agent(stage: str, store: Any, llm_client: Any, *, crash: bool = False):
-    """Instantiate the real LangGraph agent for a given stage."""
+def _build_agent(stage: str, store: Any, llm_client: Any):
     from src.agents.compliance_agent import ComplianceAgent
     from src.agents.credit_analysis_agent import CreditAnalysisAgent
     from src.agents.decision_orchestrator_agent import DecisionOrchestratorAgent
@@ -62,7 +54,7 @@ def _build_agent(stage: str, store: Any, llm_client: Any, *, crash: bool = False
     if stage == "credit":
         return CreditAnalysisAgent(agent_id, at, store, reg, llm_client)
     if stage == "fraud":
-        return FraudDetectionAgent(agent_id, at, store, reg, llm_client, crash_before_complete=crash)
+        return FraudDetectionAgent(agent_id, at, store, reg, llm_client)
     if stage == "compliance":
         return ComplianceAgent(agent_id, at, store, reg, llm_client)
     if stage == "decision":
@@ -70,35 +62,36 @@ def _build_agent(stage: str, store: Any, llm_client: Any, *, crash: bool = False
     raise HTTPException(400, f"Unknown stage: {stage}")
 
 
-def _session_events_json(events: list) -> list[dict[str, Any]]:
-    return [
-        {
-            "stream_position": e.stream_position,
-            "event_type": e.event_type,
-            "payload": dict(e.payload) if isinstance(e.payload, dict) else e.payload,
-            "recorded_at": str(e.recorded_at) if e.recorded_at else None,
-        }
-        for e in events
-    ]
-
-
 # ---------------------------------------------------------------------------
-#  OCC-capturing store proxy
+#  Logging store proxy — intercepts appends and pushes to SSE queue
 # ---------------------------------------------------------------------------
 
-class _OccCapturingStore:
-    """Thin proxy that captures OCC exceptions for reporting while delegating
-    all other behaviour to the real store unchanged."""
+class _LoggingStore:
+    """Wraps the real store: every append pushes event details to an SSE queue."""
 
-    def __init__(self, real_store: Any):
+    def __init__(self, real_store: Any, queue: asyncio.Queue, label: str = ""):
         self._real = real_store
-        self.occ_log: list[dict[str, Any]] = []
+        self._queue = queue
+        self._label = label
 
     async def append(self, stream_id, events, expected_version, **kw):
         try:
-            return await self._real.append(stream_id, events, expected_version, **kw)
+            result = await self._real.append(stream_id, events, expected_version, **kw)
+            for idx, ev in enumerate(events):
+                pos = result[idx] if isinstance(result, list) and idx < len(result) else None
+                self._queue.put_nowait({
+                    "type": "event_written",
+                    "label": self._label,
+                    "stream_id": stream_id,
+                    "event_type": ev.get("event_type", "?"),
+                    "stream_position": pos,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+            return result
         except OptimisticConcurrencyError as exc:
-            self.occ_log.append({
+            self._queue.put_nowait({
+                "type": "occ_error",
+                "label": self._label,
                 "stream_id": exc.stream_id,
                 "expected_version": exc.expected,
                 "actual_version": exc.actual,
@@ -112,7 +105,7 @@ class _OccCapturingStore:
 
 
 # ---------------------------------------------------------------------------
-#  Run a single agent
+#  Run a single agent (streaming SSE)
 # ---------------------------------------------------------------------------
 
 class AgentRunBody(BaseModel):
@@ -121,245 +114,186 @@ class AgentRunBody(BaseModel):
 
 
 @router.post("/v1/agents/run")
-async def run_single_agent(request: Request, body: AgentRunBody) -> dict[str, Any]:
-    """Run one real LangGraph agent against an application."""
+async def run_agent_streaming(request: Request, body: AgentRunBody) -> dict[str, Any]:
+    """Start a single agent run. Returns a job_id for SSE streaming."""
     store = _require_pg(request)
+    jobs: JobRegistry = request.app.state.jobs
+    llm = request.app.state.llm_client
 
     if body.stage not in STAGE_TO_AGENT_TYPE:
-        raise HTTPException(400, f"Unknown stage '{body.stage}'. Must be one of {list(STAGE_TO_AGENT_TYPE)}")
+        raise HTTPException(400, f"Unknown stage '{body.stage}'. Use: {list(STAGE_TO_AGENT_TYPE)}")
 
     loan = await store.load_stream(f"loan-{body.application_id}")
-    _ensure_submitted(loan)
+    if not any(e.event_type == "ApplicationSubmitted" for e in loan):
+        raise HTTPException(400, "No ApplicationSubmitted — create the application first.")
 
-    agent = _build_agent(body.stage, store, request.app.state.llm_client)
-    t0 = time.time()
-    try:
-        await agent.process_application(body.application_id)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "application_id": body.application_id,
+    job_id = jobs.create()
+    st = jobs.get(job_id)
+    assert st is not None
+
+    async def worker():
+        proxy = _LoggingStore(store, st.queue, label="agent")
+        agent = _build_agent(body.stage, proxy, llm)
+        st.queue.put_nowait({
+            "type": "progress",
+            "message": f"Starting {body.stage} agent on {body.application_id}",
             "stage": body.stage,
-            "error": type(exc).__name__,
-            "detail": str(exc)[:500],
-            "session_id": agent.session_id,
-            "duration_ms": int((time.time() - t0) * 1000),
-        }
+            "application_id": body.application_id,
+        })
+        t0 = time.time()
+        try:
+            await agent.process_application(body.application_id)
+            ms = int((time.time() - t0) * 1000)
+            st.queue.put_nowait({
+                "type": "complete",
+                "message": f"{body.stage} agent completed in {ms}ms",
+                "session_id": agent.session_id,
+                "duration_ms": ms,
+                "application_id": body.application_id,
+            })
+        except asyncio.CancelledError:
+            ms = int((time.time() - t0) * 1000)
+            st.queue.put_nowait({
+                "type": "interrupted",
+                "message": f"{body.stage} agent interrupted after {ms}ms",
+                "session_id": agent.session_id,
+                "duration_ms": ms,
+                "application_id": body.application_id,
+            })
+        except Exception as exc:
+            ms = int((time.time() - t0) * 1000)
+            st.queue.put_nowait({
+                "type": "error",
+                "message": f"{type(exc).__name__}: {str(exc)[:500]}",
+                "session_id": getattr(agent, "session_id", None),
+                "duration_ms": ms,
+                "application_id": body.application_id,
+            })
+        finally:
+            st.done = True
+            st.queue.put_nowait(None)
 
-    session_stream = await store.load_stream(f"agent-{STAGE_TO_AGENT_TYPE[body.stage]}-{agent.session_id}")
-
-    return {
-        "ok": True,
-        "application_id": body.application_id,
-        "stage": body.stage,
-        "session_id": agent.session_id,
-        "session_stream": f"agent-{STAGE_TO_AGENT_TYPE[body.stage]}-{agent.session_id}",
-        "duration_ms": int((time.time() - t0) * 1000),
-        "session_events": _session_events_json(session_stream),
-    }
+    task = asyncio.create_task(worker())
+    st.task = task
+    return {"job_id": job_id, "stream_url": f"/v1/jobs/{job_id}/stream"}
 
 
 # ---------------------------------------------------------------------------
-#  Concurrent credit analysis (OCC demonstration)
+#  Run dual agents in parallel (same app + stage → OCC)
 # ---------------------------------------------------------------------------
 
-class ConcurrentCreditBody(BaseModel):
+class DualRunBody(BaseModel):
     application_id: str
+    stage: str = Field(..., description="Stage to run in parallel (e.g. credit, fraud)")
 
 
-@router.post("/v1/agents/concurrent-credit")
-async def concurrent_credit(request: Request, body: ConcurrentCreditBody) -> dict[str, Any]:
+@router.post("/v1/agents/run-dual")
+async def run_dual_agents(request: Request, body: DualRunBody) -> dict[str, Any]:
     """
-    Run two CreditAnalysisAgents concurrently against the same application.
-    One wins the append to credit-{id}; the other hits OCC (retries, sees winner's event, yields).
-    Prerequisite stages (document) are run automatically if missing.
+    Run two instances of the same agent on the same application concurrently.
+    Both stream logs to the same SSE job. OCC events are captured and streamed.
     """
     store = _require_pg(request)
+    jobs: JobRegistry = request.app.state.jobs
     llm = request.app.state.llm_client
-    app_id = body.application_id
 
-    loan = await store.load_stream(f"loan-{app_id}")
-    _ensure_submitted(loan)
+    if body.stage not in STAGE_TO_AGENT_TYPE:
+        raise HTTPException(400, f"Unknown stage '{body.stage}'. Use: {list(STAGE_TO_AGENT_TYPE)}")
 
-    credit_events = await store.load_stream(f"credit-{app_id}")
-    if any(e.event_type == "CreditAnalysisCompleted" for e in credit_events):
-        raise HTTPException(
-            409,
-            f"credit-{app_id} already has a CreditAnalysisCompleted event. "
-            "Pick an application that hasn't had credit analysis yet, or create a new one.",
-        )
+    loan = await store.load_stream(f"loan-{body.application_id}")
+    if not any(e.event_type == "ApplicationSubmitted" for e in loan):
+        raise HTTPException(400, "No ApplicationSubmitted — create the application first.")
 
-    if not any(e.event_type == "CreditAnalysisRequested" for e in loan):
-        agent_doc = _build_agent("document", store, llm)
-        await agent_doc.process_application(app_id)
+    job_id = jobs.create()
+    st = jobs.get(job_id)
+    assert st is not None
 
-    proxy = _OccCapturingStore(store)
-
-    agent_a = _build_agent("credit", proxy, llm)
-    agent_b = _build_agent("credit", proxy, llm)
-
-    t0 = time.time()
-    results = await asyncio.gather(
-        _run_agent_safe(agent_a, app_id, "A"),
-        _run_agent_safe(agent_b, app_id, "B"),
-    )
-    duration_ms = int((time.time() - t0) * 1000)
-
-    credit_events = await store.load_stream(f"credit-{app_id}")
-    completed = [e for e in credit_events if e.event_type == "CreditAnalysisCompleted"]
-    winner_session = completed[0].payload.get("session_id") if completed else None
-
-    for r in results:
-        r["is_winner"] = r.get("session_id") == winner_session
-
-    session_a_stream = await store.load_stream(
-        f"agent-{AgentType.CREDIT_ANALYSIS.value}-{agent_a.session_id}"
-    )
-    session_b_stream = await store.load_stream(
-        f"agent-{AgentType.CREDIT_ANALYSIS.value}-{agent_b.session_id}"
-    )
-
-    return {
-        "application_id": app_id,
-        "duration_ms": duration_ms,
-        "results": results,
-        "occ_events": proxy.occ_log,
-        "credit_stream": _session_events_json(credit_events),
-        "agent_a_session": _session_events_json(session_a_stream),
-        "agent_b_session": _session_events_json(session_b_stream),
-        "summary": _build_occ_summary(results, proxy.occ_log, winner_session),
-    }
-
-
-async def _run_agent_safe(agent, app_id: str, label: str) -> dict[str, Any]:
-    try:
-        await agent.process_application(app_id)
-        return {
+    async def run_one(label: str):
+        proxy = _LoggingStore(store, st.queue, label=label)
+        agent = _build_agent(body.stage, proxy, llm)
+        st.queue.put_nowait({
+            "type": "progress",
             "label": label,
-            "session_id": agent.session_id,
-            "ok": True,
-            "error": None,
-        }
-    except Exception as exc:
-        return {
-            "label": label,
-            "session_id": agent.session_id,
-            "ok": False,
-            "error": type(exc).__name__,
-            "detail": str(exc)[:500],
-        }
+            "message": f"[{label}] Starting {body.stage} agent",
+            "stage": body.stage,
+            "application_id": body.application_id,
+        })
+        t0 = time.time()
+        try:
+            await agent.process_application(body.application_id)
+            ms = int((time.time() - t0) * 1000)
+            st.queue.put_nowait({
+                "type": "agent_done",
+                "label": label,
+                "ok": True,
+                "message": f"[{label}] {body.stage} agent completed in {ms}ms",
+                "session_id": agent.session_id,
+                "duration_ms": ms,
+            })
+        except Exception as exc:
+            ms = int((time.time() - t0) * 1000)
+            st.queue.put_nowait({
+                "type": "agent_done",
+                "label": label,
+                "ok": False,
+                "message": f"[{label}] {type(exc).__name__}: {str(exc)[:300]}",
+                "session_id": getattr(agent, "session_id", None),
+                "duration_ms": ms,
+                "error": type(exc).__name__,
+            })
 
+    async def worker():
+        st.queue.put_nowait({
+            "type": "progress",
+            "message": f"Running two {body.stage} agents in parallel on {body.application_id}",
+            "application_id": body.application_id,
+        })
+        await asyncio.gather(run_one("Agent-A"), run_one("Agent-B"))
+        st.queue.put_nowait({
+            "type": "complete",
+            "message": "Both agents finished. Check logs for OCC events.",
+            "application_id": body.application_id,
+        })
+        st.done = True
+        st.queue.put_nowait(None)
 
-def _build_occ_summary(
-    results: list[dict], occ_log: list[dict], winner_session: str | None
-) -> str:
-    winner = next((r for r in results if r.get("is_winner")), None)
-    loser = next((r for r in results if not r.get("is_winner")), None)
-    parts = []
-    if winner:
-        parts.append(
-            f"Agent {winner['label']} (session {winner['session_id']}) won the race "
-            f"and wrote CreditAnalysisCompleted to the credit stream."
-        )
-    if occ_log:
-        for occ in occ_log:
-            parts.append(
-                f"OCC detected on {occ['stream_id']}: "
-                f"expected version {occ['expected_version']}, "
-                f"actual was {occ['actual_version']} "
-                f"(event types: {', '.join(occ['event_types'])})."
-            )
-    if loser:
-        if loser.get("ok"):
-            parts.append(
-                f"Agent {loser['label']} (session {loser['session_id']}) completed its session "
-                f"but its CreditAnalysisCompleted was skipped — the winner's event already existed."
-            )
-        else:
-            parts.append(
-                f"Agent {loser['label']} (session {loser['session_id']}) "
-                f"encountered {loser.get('error', 'an error')}: {loser.get('detail', '')}."
-            )
-    if not occ_log:
-        parts.append(
-            "No OCC exceptions were raised — one agent committed before the other reached the append. "
-            "The domain-level idempotency check prevented the duplicate write."
-        )
-    return " ".join(parts)
+    task = asyncio.create_task(worker())
+    st.task = task
+    return {"job_id": job_id, "stream_url": f"/v1/jobs/{job_id}/stream"}
 
 
 # ---------------------------------------------------------------------------
-#  Agent crash simulation + Gas Town recovery
+#  Interrupt a running agent
 # ---------------------------------------------------------------------------
 
-class CrashSimBody(BaseModel):
-    application_id: str
+@router.post("/v1/agents/interrupt/{job_id}")
+async def interrupt_agent(request: Request, job_id: str) -> dict[str, Any]:
+    """Cancel a running agent task. Events written before cancellation remain in the store."""
+    jobs: JobRegistry = request.app.state.jobs
+    cancelled = jobs.cancel(job_id)
+    if not cancelled:
+        raise HTTPException(404, "Job not found or already finished")
+    return {"job_id": job_id, "interrupted": True}
 
 
-@router.post("/v1/agents/crash-simulation")
-async def crash_simulation(request: Request, body: CrashSimBody) -> dict[str, Any]:
-    """
-    Run FraudDetectionAgent with crash_before_complete=True.
-    The agent writes FraudScreeningInitiated + anomalies, then crashes
-    before FraudScreeningCompleted. The base agent records AgentSessionFailed.
-    Returns the partial work so you can then call /v1/agents/recover.
-    """
-    store = _require_pg(request)
-    llm = request.app.state.llm_client
-    app_id = body.application_id
-
-    loan = await store.load_stream(f"loan-{app_id}")
-    _ensure_submitted(loan)
-
-    if not any(e.event_type == "CreditAnalysisRequested" for e in loan):
-        agent_doc = _build_agent("document", store, llm)
-        await agent_doc.process_application(app_id)
-
-    agent = _build_agent("fraud", store, llm, crash=True)
-    crash_error: str | None = None
-    try:
-        await agent.process_application(app_id)
-    except Exception as exc:
-        crash_error = f"{type(exc).__name__}: {exc}"
-
-    session_id = agent.session_id
-    at = AgentType.FRAUD_DETECTION.value
-    session_stream = await store.load_stream(f"agent-{at}-{session_id}")
-    fraud_stream = await store.load_stream(f"fraud-{app_id}")
-
-    return {
-        "application_id": app_id,
-        "agent_type": at,
-        "session_id": session_id,
-        "crash_error": crash_error,
-        "session_events": _session_events_json(session_stream),
-        "fraud_stream_events": _session_events_json(fraud_stream),
-    }
-
+# ---------------------------------------------------------------------------
+#  Gas Town: reconstruct agent context
+# ---------------------------------------------------------------------------
 
 class RecoverBody(BaseModel):
-    application_id: str
     session_id: str
-    resume: bool = Field(
-        default=True,
-        description="After reconstructing context, run the fraud agent again with prior_session_id to resume.",
-    )
+    agent_type: str = Field(default="", description="Agent type value, e.g. credit_analysis")
 
 
 @router.post("/v1/agents/recover")
 async def recover_agent(request: Request, body: RecoverBody) -> dict[str, Any]:
-    """
-    Gas Town recovery: reconstruct_agent_context from the crashed session,
-    then optionally resume the fraud agent with prior_session_id.
-    """
+    """Reconstruct agent context from the ledger after an interrupted session."""
     store = _require_pg(request)
-    llm = request.app.state.llm_client
-    at = AgentType.FRAUD_DETECTION.value
-
+    at = body.agent_type or AgentType.CREDIT_ANALYSIS.value
     ctx = await reconstruct_agent_context(store, at, body.session_id)
-    out: dict[str, Any] = {
-        "application_id": body.application_id,
-        "crashed_session_id": body.session_id,
+    return {
+        "session_id": body.session_id,
+        "agent_type": at,
         "reconstructed_context": {
             "context_text": ctx.context_text,
             "last_event_position": ctx.last_event_position,
@@ -368,28 +302,6 @@ async def recover_agent(request: Request, body: RecoverBody) -> dict[str, Any]:
             "verbatim_tail": ctx.verbatim_tail,
         },
     }
-
-    if body.resume:
-        from src.agents.fraud_detection_agent import FraudDetectionAgent
-        reg = build_registry_client(store)
-        agent = FraudDetectionAgent(
-            "app-fraud-resume", at, store, reg, llm, crash_before_complete=False,
-        )
-        resume_error: str | None = None
-        try:
-            await agent.process_application(body.application_id, prior_session_id=body.session_id)
-        except Exception as exc:
-            resume_error = f"{type(exc).__name__}: {exc}"
-
-        resumed_session_stream = await store.load_stream(f"agent-{at}-{agent.session_id}")
-        fraud_stream = await store.load_stream(f"fraud-{body.application_id}")
-
-        out["resumed_session_id"] = agent.session_id
-        out["resume_error"] = resume_error
-        out["resumed_session_events"] = _session_events_json(resumed_session_stream)
-        out["fraud_stream_after_resume"] = _session_events_json(fraud_stream)
-
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -406,5 +318,13 @@ async def get_agent_session(request: Request, stream_id: str) -> dict[str, Any]:
     return {
         "stream_id": stream_id,
         "event_count": len(events),
-        "events": _session_events_json(events),
+        "events": [
+            {
+                "stream_position": e.stream_position,
+                "event_type": e.event_type,
+                "payload": dict(e.payload) if isinstance(e.payload, dict) else e.payload,
+                "recorded_at": str(e.recorded_at) if e.recorded_at else None,
+            }
+            for e in events
+        ],
     }

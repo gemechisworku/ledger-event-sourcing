@@ -12,6 +12,7 @@ class JobState:
     queue: asyncio.Queue[Any | None]
     done: bool = False
     error: str | None = None
+    task: asyncio.Task | None = None
 
 
 class JobRegistry:
@@ -28,3 +29,10 @@ class JobRegistry:
 
     def forget(self, job_id: str) -> None:
         self._jobs.pop(job_id, None)
+
+    def cancel(self, job_id: str) -> bool:
+        st = self._jobs.get(job_id)
+        if st and st.task and not st.task.done():
+            st.task.cancel()
+            return True
+        return False

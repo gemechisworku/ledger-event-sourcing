@@ -1,32 +1,119 @@
 import { useQuery } from '@tanstack/react-query'
-import { Bot, Loader2, Play, RefreshCw, Skull, Zap } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { Bot, Hand, Loader2, Play, RefreshCw, Zap } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import type { AgentSseEvent } from '@/hooks/use-agent-stream'
+import { useAgentStream } from '@/hooks/use-agent-stream'
 import {
-  crashSimulation,
+  interruptAgent,
   listApplications,
   recoverAgent,
   runAgent,
-  runConcurrentCredit,
+  runDualAgents,
 } from '@/lib/api'
 
 const STAGES = ['document', 'credit', 'fraud', 'compliance', 'decision'] as const
+const AGENT_TYPE_MAP: Record<string, string> = {
+  document: 'document_processing',
+  credit: 'credit_analysis',
+  fraud: 'fraud_detection',
+  compliance: 'compliance',
+  decision: 'decision_orchestrator',
+}
 
-function JsonBlock({ value, maxH = '24rem' }: { value: unknown; maxH?: string }) {
+/* ── Reusable log panel ── */
+
+function LogPanel({ logs, maxH = '24rem' }: { logs: AgentSseEvent[]; maxH?: string }) {
+  const bottomRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs.length])
+
+  if (logs.length === 0) return null
   return (
-    <pre
-      className="overflow-auto rounded-lg border border-border/60 bg-muted/30 p-3 text-xs leading-relaxed"
+    <div
+      className="overflow-auto rounded-lg border border-border/60 bg-zinc-950 p-3 font-mono text-xs leading-relaxed text-zinc-300"
       style={{ maxHeight: maxH }}
     >
-      {JSON.stringify(value, null, 2)}
-    </pre>
+      {logs.map((ev, i) => (
+        <LogLine key={i} ev={ev} />
+      ))}
+      <div ref={bottomRef} />
+    </div>
   )
 }
+
+function LogLine({ ev }: { ev: AgentSseEvent }) {
+  const ts = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : ''
+  const prefix = ev.label ? `[${ev.label}] ` : ''
+
+  if (ev.type === 'event_written') {
+    return (
+      <div className="text-emerald-400">
+        <span className="text-zinc-500">{ts} </span>
+        {prefix}EVENT {ev.event_type}{' '}
+        <span className="text-zinc-500">→ {ev.stream_id}</span>
+      </div>
+    )
+  }
+  if (ev.type === 'occ_error') {
+    return (
+      <div className="font-semibold text-amber-400">
+        <span className="text-zinc-500">{ts} </span>
+        {prefix}OCC CONFLICT on {ev.stream_id} — expected v{ev.expected_version}, actual v
+        {ev.actual_version}
+        {ev.event_types?.length ? ` (writing: ${ev.event_types.join(', ')})` : ''}
+      </div>
+    )
+  }
+  if (ev.type === 'agent_done') {
+    const color = ev.ok ? 'text-emerald-400' : 'text-red-400'
+    return (
+      <div className={color}>
+        <span className="text-zinc-500">{ts} </span>
+        {ev.message}
+      </div>
+    )
+  }
+  if (ev.type === 'complete') {
+    return (
+      <div className="mt-1 font-semibold text-emerald-300">
+        <span className="text-zinc-500">{ts} </span>
+        {ev.message ?? 'Done'}
+      </div>
+    )
+  }
+  if (ev.type === 'interrupted') {
+    return (
+      <div className="mt-1 font-semibold text-yellow-400">
+        <span className="text-zinc-500">{ts} </span>
+        INTERRUPTED — {ev.message}
+      </div>
+    )
+  }
+  if (ev.type === 'error') {
+    return (
+      <div className="mt-1 font-semibold text-red-400">
+        <span className="text-zinc-500">{ts} </span>
+        ERROR: {ev.message}
+      </div>
+    )
+  }
+  return (
+    <div>
+      <span className="text-zinc-500">{ts} </span>
+      {prefix}
+      {ev.message ?? JSON.stringify(ev)}
+    </div>
+  )
+}
+
+/* ── Application picker (shared) ── */
 
 function AppPicker({
   value,
@@ -42,9 +129,7 @@ function AppPicker({
     queryFn: () => listApplications({ limit: 200 }),
     staleTime: 30_000,
   })
-  const apps = (q.data?.applications ?? []).filter(
-    (a) => a.state !== 'LOCAL',
-  )
+  const apps = (q.data?.applications ?? []).filter((a) => a.state !== 'LOCAL')
 
   return (
     <div className="space-y-1">
@@ -63,7 +148,9 @@ function AppPicker({
             </option>
           ))}
         </select>
-        {q.isFetching ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+        {q.isFetching ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : null}
       </div>
       <Input
         placeholder="Or type application_id manually"
@@ -75,78 +162,141 @@ function AppPicker({
   )
 }
 
-function NarrativeBox({ text }: { text: string }) {
+function StagePicker({
+  value,
+  onChange,
+  label,
+}: {
+  value: string
+  onChange: (v: string) => void
+  label?: string
+}) {
   return (
-    <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm leading-relaxed">
-      {text}
+    <div className="space-y-1">
+      <Label>{label ?? 'Stage'}</Label>
+      <select
+        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {STAGES.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { variant: 'default' | 'destructive' | 'outline' | 'secondary'; text: string }> = {
+    idle: { variant: 'secondary', text: 'Idle' },
+    running: { variant: 'outline', text: 'Running…' },
+    done: { variant: 'default', text: 'Completed' },
+    error: { variant: 'destructive', text: 'Failed' },
+    interrupted: { variant: 'secondary', text: 'Interrupted' },
+  }
+  const m = map[status] ?? map.idle
+  return <Badge variant={m.variant}>{m.text}</Badge>
+}
+
+/* ── Page ── */
 
 export function AgentRunsPage() {
   // ── Single agent run ──
   const [singleApp, setSingleApp] = useState('')
   const [singleStage, setSingleStage] = useState<string>('credit')
-  const [singleResult, setSingleResult] = useState<Record<string, unknown> | null>(null)
-  const [singleLoading, setSingleLoading] = useState(false)
   const [singleErr, setSingleErr] = useState<string | null>(null)
+  const single = useAgentStream()
 
   const handleRunSingle = useCallback(async () => {
-    if (!singleApp.trim()) { setSingleErr('Select an application'); return }
-    setSingleLoading(true); setSingleErr(null); setSingleResult(null)
+    if (!singleApp.trim()) {
+      setSingleErr('Select an application')
+      return
+    }
+    setSingleErr(null)
     try {
-      setSingleResult(await runAgent(singleApp.trim(), singleStage))
-    } catch (e) { setSingleErr((e as Error).message) }
-    finally { setSingleLoading(false) }
-  }, [singleApp, singleStage])
+      const { job_id } = await runAgent(singleApp.trim(), singleStage)
+      single.start(job_id)
+    } catch (e) {
+      setSingleErr((e as Error).message)
+    }
+  }, [singleApp, singleStage, single])
 
-  // ── Concurrent credit ──
-  const [occApp, setOccApp] = useState('')
-  const [occResult, setOccResult] = useState<Record<string, unknown> | null>(null)
-  const [occLoading, setOccLoading] = useState(false)
-  const [occErr, setOccErr] = useState<string | null>(null)
+  // ── Concurrent dual agent run ──
+  const [dualApp, setDualApp] = useState('')
+  const [dualStage, setDualStage] = useState<string>('credit')
+  const [dualErr, setDualErr] = useState<string | null>(null)
+  const dual = useAgentStream()
 
-  const handleOcc = useCallback(async () => {
-    if (!occApp.trim()) { setOccErr('Select an application'); return }
-    setOccLoading(true); setOccErr(null); setOccResult(null)
+  const handleRunDual = useCallback(async () => {
+    if (!dualApp.trim()) {
+      setDualErr('Select an application')
+      return
+    }
+    setDualErr(null)
     try {
-      setOccResult(await runConcurrentCredit(occApp.trim()))
-    } catch (e) { setOccErr((e as Error).message) }
-    finally { setOccLoading(false) }
-  }, [occApp])
+      const { job_id } = await runDualAgents(dualApp.trim(), dualStage)
+      dual.start(job_id)
+    } catch (e) {
+      setDualErr((e as Error).message)
+    }
+  }, [dualApp, dualStage, dual])
 
-  // ── Crash & recover ──
-  const [crashApp, setCrashApp] = useState('')
-  const [crashResult, setCrashResult] = useState<Record<string, unknown> | null>(null)
+  // ── Gas Town: run → interrupt → recover ──
+  const [gasApp, setGasApp] = useState('')
+  const [gasStage, setGasStage] = useState<string>('credit')
+  const [gasErr, setGasErr] = useState<string | null>(null)
   const [recoverResult, setRecoverResult] = useState<Record<string, unknown> | null>(null)
-  const [crashLoading, setCrashLoading] = useState(false)
-  const [crashErr, setCrashErr] = useState<string | null>(null)
+  const [recoverLoading, setRecoverLoading] = useState(false)
+  const gas = useAgentStream()
 
-  const handleCrash = useCallback(async () => {
-    if (!crashApp.trim()) { setCrashErr('Select an application'); return }
-    setCrashLoading(true); setCrashErr(null); setCrashResult(null); setRecoverResult(null)
+  const handleRunGas = useCallback(async () => {
+    if (!gasApp.trim()) {
+      setGasErr('Select an application')
+      return
+    }
+    setGasErr(null)
+    setRecoverResult(null)
     try {
-      setCrashResult(await crashSimulation(crashApp.trim()))
-    } catch (e) { setCrashErr((e as Error).message) }
-    finally { setCrashLoading(false) }
-  }, [crashApp])
+      const { job_id } = await runAgent(gasApp.trim(), gasStage)
+      gas.start(job_id)
+    } catch (e) {
+      setGasErr((e as Error).message)
+    }
+  }, [gasApp, gasStage, gas])
 
-  const crashSessionId = (crashResult as { session_id?: string })?.session_id
+  const handleInterrupt = useCallback(async () => {
+    if (!gas.jobId) return
+    try {
+      await interruptAgent(gas.jobId)
+    } catch (e) {
+      setGasErr((e as Error).message)
+    }
+  }, [gas.jobId])
+
+  const gasSessionId = gas.logs.find((l) => l.session_id)?.session_id ?? null
 
   const handleRecover = useCallback(async () => {
-    if (!crashSessionId || !crashApp.trim()) return
-    setCrashLoading(true); setCrashErr(null); setRecoverResult(null)
+    if (!gasSessionId) {
+      setGasErr('No session to recover — run and interrupt an agent first')
+      return
+    }
+    setRecoverLoading(true)
+    setGasErr(null)
     try {
-      setRecoverResult(
-        await recoverAgent({
-          application_id: crashApp.trim(),
-          session_id: crashSessionId,
-          resume: true,
-        }),
-      )
-    } catch (e) { setCrashErr((e as Error).message) }
-    finally { setCrashLoading(false) }
-  }, [crashApp, crashSessionId])
+      const res = await recoverAgent({
+        session_id: gasSessionId,
+        agent_type: AGENT_TYPE_MAP[gasStage] ?? gasStage,
+      })
+      setRecoverResult(res)
+    } catch (e) {
+      setGasErr((e as Error).message)
+    } finally {
+      setRecoverLoading(false)
+    }
+  }, [gasSessionId, gasStage])
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
@@ -154,11 +304,14 @@ export function AgentRunsPage() {
         <div className="flex items-start gap-3">
           <Bot className="mt-1 h-8 w-8 shrink-0 text-primary" />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-primary">Operations</p>
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary">
+              Operations
+            </p>
             <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Agent Runs</h1>
             <p className="mt-2 max-w-2xl text-muted-foreground">
-              Run individual LangGraph agents against loan applications, test concurrent credit
-              analysis with optimistic concurrency, and simulate crash recovery with Gas Town.
+              Run LangGraph agents against loan applications with live event streaming. Test
+              concurrent runs for OCC conflicts, or interrupt a running agent and recover with Gas
+              Town.
             </p>
           </div>
         </div>
@@ -169,178 +322,139 @@ export function AgentRunsPage() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Play className="h-5 w-5 text-primary" />
-            <CardTitle>Run individual agent</CardTitle>
+            <CardTitle>Run agent</CardTitle>
+            <StatusBadge status={single.status} />
           </div>
           <CardDescription>
-            Pick an application and a pipeline stage. The corresponding LangGraph agent runs
-            end-to-end and writes real events to the ledger.
+            Pick an application and a pipeline stage. The agent runs end-to-end and all ledger writes
+            appear in the log below in real time.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <AppPicker value={singleApp} onChange={setSingleApp} />
-            <div className="space-y-1">
-              <Label>Stage</Label>
-              <select
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                value={singleStage}
-                onChange={(e) => setSingleStage(e.target.value)}
-              >
-                {STAGES.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
+            <StagePicker value={singleStage} onChange={setSingleStage} />
           </div>
-          <Button onClick={handleRunSingle} disabled={singleLoading}>
-            {singleLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+          <Button
+            onClick={handleRunSingle}
+            disabled={single.status === 'running'}
+          >
+            {single.status === 'running' ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="mr-2 h-4 w-4" />
+            )}
             Run {singleStage} agent
           </Button>
           {singleErr ? <p className="text-sm text-destructive">{singleErr}</p> : null}
-          {singleResult ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Badge variant={(singleResult as { ok?: boolean }).ok ? 'default' : 'destructive'}>
-                  {(singleResult as { ok?: boolean }).ok ? 'Succeeded' : 'Failed'}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  Session: {(singleResult as { session_id?: string }).session_id ?? '—'} ·{' '}
-                  {(singleResult as { duration_ms?: number }).duration_ms ?? 0}ms
-                </span>
-              </div>
-              <JsonBlock value={singleResult} />
-            </div>
-          ) : null}
+          <LogPanel logs={single.logs} />
         </CardContent>
       </Card>
 
-      {/* ── Concurrent credit (OCC) ── */}
+      {/* ── Concurrent dual agent run (OCC) ── */}
       <Card className="border-0 shadow-md ring-1 ring-border/60">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Zap className="h-5 w-5 text-primary" />
-            <CardTitle>Concurrent credit analysis</CardTitle>
+            <CardTitle>Concurrent analysis (OCC)</CardTitle>
+            <StatusBadge status={dual.status} />
           </div>
           <CardDescription>
-            Two CreditAnalysisAgents race on the same application. One writes{' '}
-            <code className="text-xs">CreditAnalysisCompleted</code> to the credit stream; the
-            other hits <code className="text-xs">OptimisticConcurrencyError</code>, retries, and
-            yields. Document processing runs automatically if needed.
+            Two instances of the same agent race on the same application and stage. They both write
+            to the same domain stream — one wins, the other hits{' '}
+            <code className="text-xs">OptimisticConcurrencyError</code> and retries. Watch the OCC
+            conflicts appear in the log in real time.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <AppPicker
-            value={occApp}
-            onChange={setOccApp}
-            label="Application (no existing CreditAnalysisCompleted)"
-          />
-          <Button onClick={handleOcc} disabled={occLoading}>
-            {occLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-            Run concurrent credit analysis
+          <div className="grid gap-4 sm:grid-cols-2">
+            <AppPicker value={dualApp} onChange={setDualApp} label="Application (both agents)" />
+            <StagePicker value={dualStage} onChange={setDualStage} label="Stage (both agents)" />
+          </div>
+          <Button
+            onClick={handleRunDual}
+            disabled={dual.status === 'running'}
+          >
+            {dual.status === 'running' ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Zap className="mr-2 h-4 w-4" />
+            )}
+            Run two {dualStage} agents in parallel
           </Button>
-          {occErr ? <p className="text-sm text-destructive">{occErr}</p> : null}
-          {occResult ? (
-            <div className="space-y-3">
-              {(occResult as { summary?: string }).summary ? (
-                <NarrativeBox text={(occResult as { summary: string }).summary} />
-              ) : null}
-              {Array.isArray((occResult as { occ_events?: unknown[] }).occ_events) &&
-              ((occResult as { occ_events: unknown[] }).occ_events).length > 0 ? (
-                <div>
-                  <p className="mb-1 text-xs font-medium text-muted-foreground">
-                    OCC events captured during the race
-                  </p>
-                  <JsonBlock
-                    value={(occResult as { occ_events: unknown[] }).occ_events}
-                    maxH="12rem"
-                  />
-                </div>
-              ) : null}
-              <details className="group">
-                <summary className="cursor-pointer text-sm font-medium text-muted-foreground group-open:mb-2">
-                  Full response
-                </summary>
-                <JsonBlock value={occResult} />
-              </details>
-            </div>
-          ) : null}
+          {dualErr ? <p className="text-sm text-destructive">{dualErr}</p> : null}
+          <LogPanel logs={dual.logs} maxH="30rem" />
         </CardContent>
       </Card>
 
-      {/* ── Crash & recover ── */}
+      {/* ── Gas Town: Run → Interrupt → Recover ── */}
       <Card className="border-0 shadow-md ring-1 ring-border/60">
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Skull className="h-5 w-5 text-primary" />
-            <CardTitle>Agent crash &amp; Gas Town recovery</CardTitle>
+            <RefreshCw className="h-5 w-5 text-primary" />
+            <CardTitle>Gas Town recovery</CardTitle>
+            <StatusBadge status={gas.status} />
           </div>
           <CardDescription>
-            Runs a FraudDetectionAgent that crashes mid-session (after writing{' '}
-            <code className="text-xs">FraudScreeningInitiated</code> but before{' '}
-            <code className="text-xs">FraudScreeningCompleted</code>). Then reconstructs
-            context from the ledger and resumes the agent with a new session.
+            Start any agent, then interrupt it mid-execution. The partial events remain in the
+            ledger. Use <strong>Recover</strong> to reconstruct the agent's context from those
+            events — demonstrating the Gas Town persistent ledger pattern.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <AppPicker value={crashApp} onChange={setCrashApp} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <AppPicker value={gasApp} onChange={setGasApp} />
+            <StagePicker value={gasStage} onChange={setGasStage} />
+          </div>
+
           <div className="flex flex-wrap gap-2">
-            <Button onClick={handleCrash} disabled={crashLoading} variant="destructive">
-              {crashLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Skull className="mr-2 h-4 w-4" />}
-              Simulate crash
+            <Button onClick={handleRunGas} disabled={gas.status === 'running'}>
+              {gas.status === 'running' ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-2 h-4 w-4" />
+              )}
+              Run {gasStage} agent
             </Button>
+
             <Button
-              onClick={handleRecover}
-              disabled={crashLoading || !crashSessionId}
-              variant="default"
+              variant="destructive"
+              onClick={handleInterrupt}
+              disabled={gas.status !== 'running'}
             >
-              {crashLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              Reconstruct &amp; resume
+              <Hand className="mr-2 h-4 w-4" />
+              Interrupt
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={handleRecover}
+              disabled={
+                recoverLoading ||
+                (gas.status !== 'interrupted' && gas.status !== 'error' && gas.status !== 'done')
+              }
+            >
+              {recoverLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Recover session
             </Button>
           </div>
-          {crashErr ? <p className="text-sm text-destructive">{crashErr}</p> : null}
-          {crashResult ? (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="destructive">Crashed</Badge>
-                <span className="text-xs text-muted-foreground">
-                  Session: {crashSessionId ?? '—'}
-                </span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {(crashResult as { crash_error?: string }).crash_error}
-              </p>
-              <details className="group">
-                <summary className="cursor-pointer text-sm font-medium text-muted-foreground group-open:mb-2">
-                  Crash details
-                </summary>
-                <JsonBlock value={crashResult} />
-              </details>
-            </div>
-          ) : null}
+
+          {gasErr ? <p className="text-sm text-destructive">{gasErr}</p> : null}
+          <LogPanel logs={gas.logs} />
+
           {recoverResult ? (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="default">Recovered</Badge>
-                <span className="text-xs text-muted-foreground">
-                  Resumed session:{' '}
-                  {(recoverResult as { resumed_session_id?: string }).resumed_session_id ?? '—'}
-                </span>
-              </div>
-              <div>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">
-                  Reconstructed context
-                </p>
-                <JsonBlock
-                  value={(recoverResult as { reconstructed_context?: unknown }).reconstructed_context}
-                  maxH="14rem"
-                />
-              </div>
-              <details className="group">
-                <summary className="cursor-pointer text-sm font-medium text-muted-foreground group-open:mb-2">
-                  Full recovery details
-                </summary>
-                <JsonBlock value={recoverResult} />
-              </details>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Reconstructed context</p>
+              <pre
+                className="overflow-auto rounded-lg border border-border/60 bg-muted/30 p-3 text-xs leading-relaxed"
+                style={{ maxHeight: '20rem' }}
+              >
+                {JSON.stringify(recoverResult, null, 2)}
+              </pre>
             </div>
           ) : null}
         </CardContent>
