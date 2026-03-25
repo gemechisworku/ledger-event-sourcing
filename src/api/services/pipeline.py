@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from unittest.mock import AsyncMock
 
 from src.registry.client import ApplicantRegistryClient, CompanyProfile
@@ -48,7 +48,7 @@ def build_registry_client(store: Any) -> Any:
 async def run_pipeline_events(
     application_id: str,
     store: Any,
-    anthropic_client: AsyncAnthropic | Any,
+    llm_client: AsyncOpenAI | Any,
     stages: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     from src.agents.compliance_agent import ComplianceAgent
@@ -91,7 +91,7 @@ async def run_pipeline_events(
                 agent_type=AgentType.DOCUMENT_PROCESSING.value,
                 store=store,
                 registry=reg,
-                client=anthropic_client,
+                client=llm_client,
             )
             await agent.process_application(application_id)
         elif stage == "credit":
@@ -100,7 +100,7 @@ async def run_pipeline_events(
                 agent_type=AgentType.CREDIT_ANALYSIS.value,
                 store=store,
                 registry=reg,
-                client=anthropic_client,
+                client=llm_client,
             )
             await agent.process_application(application_id)
         elif stage == "fraud":
@@ -109,7 +109,7 @@ async def run_pipeline_events(
                 agent_type=AgentType.FRAUD_DETECTION.value,
                 store=store,
                 registry=reg,
-                client=anthropic_client,
+                client=llm_client,
             )
             await agent.process_application(application_id)
         elif stage == "compliance":
@@ -118,7 +118,7 @@ async def run_pipeline_events(
                 agent_type=AgentType.COMPLIANCE.value,
                 store=store,
                 registry=reg,
-                client=anthropic_client,
+                client=llm_client,
             )
             await agent.process_application(application_id)
         elif stage == "decision":
@@ -127,7 +127,7 @@ async def run_pipeline_events(
                 agent_type=AgentType.DECISION_ORCHESTRATOR.value,
                 store=store,
                 registry=reg,
-                client=anthropic_client,
+                client=llm_client,
             )
             await agent.process_application(application_id)
         else:

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { History } from 'lucide-react'
+import { History, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useJobStream } from '@/hooks/use-job-stream'
-import { getApplication, runPipeline } from '@/lib/api'
+import { getApplication, getDecisionHistory, runPipeline } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/format'
 import { PIPELINE_STAGES } from '@/lib/pipeline-stages'
 import { getPipelineRuns, recordPipelineRun } from '@/lib/pipeline-history'
@@ -31,6 +31,12 @@ export function ApplicationDetailPage() {
   const q = useQuery({
     queryKey: ['application', id],
     queryFn: () => getApplication(id),
+    enabled: !!id,
+  })
+
+  const historyQ = useQuery({
+    queryKey: ['decision-history', id],
+    queryFn: () => getDecisionHistory(id),
     enabled: !!id,
   })
 
@@ -151,6 +157,12 @@ export function ApplicationDetailPage() {
           <Button variant="outline" asChild>
             <Link to={`/applications/${encodeURIComponent(id)}/run`}>Run pipeline</Link>
           </Button>
+          <Button variant="outline" asChild className="gap-1.5">
+            <Link to={`/query?q=${encodeURIComponent(`Show me the complete decision history of application ${id}`)}`}>
+              <Sparkles className="h-3.5 w-3.5" />
+              Ask about this app
+            </Link>
+          </Button>
         </div>
       </div>
 
@@ -247,6 +259,58 @@ export function ApplicationDetailPage() {
           />
         </div>
       </div>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">Decision history</h2>
+          <Button type="button" variant="outline" size="sm" onClick={() => void historyQ.refetch()}>
+            Reload
+          </Button>
+        </div>
+        {historyQ.isLoading && <p className="text-muted-foreground">Loading decision history…</p>}
+        {historyQ.error && <p className="text-destructive">{(historyQ.error as Error).message}</p>}
+        {historyQ.data && (
+          <Card className="border-0 bg-card/90 shadow-md ring-1 ring-border/60">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">
+                {historyQ.data.total_events} events across {historyQ.data.streams_queried.length} streams
+              </CardTitle>
+              {historyQ.data.integrity && (
+                <CardDescription className="flex items-center gap-2">
+                  <Badge variant={historyQ.data.integrity.chain_valid ? 'success' : 'destructive'}>
+                    {historyQ.data.integrity.chain_valid ? 'Chain valid' : 'Chain broken'}
+                  </Badge>
+                  <Badge variant={historyQ.data.integrity.tamper_detected ? 'destructive' : 'success'}>
+                    {historyQ.data.integrity.tamper_detected ? 'Tamper detected' : 'No tampering'}
+                  </Badge>
+                  <span className="text-xs">{historyQ.data.integrity.events_verified} events verified</span>
+                </CardDescription>
+              )}
+            </CardHeader>
+            <CardContent className="p-0">
+              <ul className="max-h-[500px] divide-y divide-border/60 overflow-auto">
+                {historyQ.data.events.map((ev, i) => (
+                  <li key={`${ev.stream_id}-${ev.stream_position}-${i}`} className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="font-mono text-[10px]">{ev.stream_id}</Badge>
+                      <span className="text-sm font-medium">{ev.event_type}</span>
+                      <span className="font-mono text-xs text-muted-foreground">#{ev.stream_position}</span>
+                      {ev.recorded_at && (
+                        <span className="text-xs text-muted-foreground">{new Date(ev.recorded_at).toLocaleString()}</span>
+                      )}
+                    </div>
+                    {ev.payload && (
+                      <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all text-xs text-muted-foreground">
+                        {JSON.stringify(ev.payload, null, 2)}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
+      </section>
 
       <section className="space-y-2">
         <div className="flex items-center justify-between gap-2">

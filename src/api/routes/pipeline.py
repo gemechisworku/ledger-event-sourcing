@@ -22,7 +22,7 @@ async def start_pipeline(
     request: Request,
 ) -> PipelineRunResponse:
     store = request.app.state.store
-    anthropic = request.app.state.anthropic
+    llm_client = request.app.state.llm_client
     jobs: JobRegistry = request.app.state.jobs
 
     job_id = jobs.create()
@@ -33,7 +33,7 @@ async def start_pipeline(
 
     async def worker() -> None:
         try:
-            async for ev in run_pipeline_events(application_id, store, anthropic, stages):
+            async for ev in run_pipeline_events(application_id, store, llm_client, stages):
                 await st.queue.put(ev)
         except Exception as e:
             await st.queue.put({"type": "error", "message": str(e), "application_id": application_id})

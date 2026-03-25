@@ -36,7 +36,8 @@ def event_store_class():
 
 
 @pytest.fixture(autouse=True)
-def _clear_anthropic_key_for_api_http_tests(monkeypatch, request):
-    """FastAPI tests use in-memory store + mock Anthropic; ignore real key from .env."""
+def _mock_llm_for_api_http_tests(monkeypatch, request):
+    """FastAPI tests use in-memory store + mock LLM; force MOCK_LLM=true."""
     if request.node.path.name.startswith("test_api_"):
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("MOCK_LLM", "true")

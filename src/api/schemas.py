@@ -73,3 +73,37 @@ class ProgressEvent(BaseModel):
     message: str | None = None
     application_id: str | None = None
     detail: dict[str, Any] | None = None
+
+
+class DecisionHistoryEvent(BaseModel):
+    stream_id: str
+    event_type: str
+    stream_position: int
+    global_position: int | None = None
+    recorded_at: str | None = None
+    payload: dict[str, Any] | None = None
+
+
+class DecisionHistoryResponse(BaseModel):
+    application_id: str
+    total_events: int
+    streams_queried: list[str]
+    events: list[DecisionHistoryEvent]
+    integrity: dict[str, Any] | None = None
+
+
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+
+
+class NLQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    history: list[ConversationMessage] = []
+
+
+class NLQueryResponse(BaseModel):
+    answer: str
+    sources: list[dict[str, Any]] = []
+    model: str | None = None
+    tokens_used: int | None = None

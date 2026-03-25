@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 
 const nav = [
   { to: '/', label: 'Dashboard' },
+  { to: '/query', label: 'Ask the Ledger' },
   { to: '/applications', label: 'Applications' },
   { to: '/settings', label: 'Settings' },
 ]

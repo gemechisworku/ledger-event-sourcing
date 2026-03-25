@@ -7,7 +7,7 @@
 #   - Postgres: localhost:5432  (user postgres / password apex / db apex_ledger)
 #
 # Override secrets: copy .env.example → .env and use `env_file` below, or:
-#   docker compose run -e ANTHROPIC_API_KEY=... api
+#   docker compose run -e OPENROUTER_API_KEY=... api
 
 services:
   postgres:
@@ -35,10 +35,17 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:apex@postgres:5432/apex_ledger
       APPLICANT_REGISTRY_URL: postgresql://postgres:apex@postgres:5432/apex_ledger
+      # Resolve paths like documents/COMP-001/... (matches DocumentUploaded.file_path)
+      DOCUMENTS_ROOT: /app/documents
       # Browser → API cross-origin (host machine ports)
       CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://127.0.0.1"
-    # Optional: create `.env` in repo root with ANTHROPIC_API_KEY, then add:
-    # env_file: [.env]
+    env_file:
+      - .env
+    volumes:
+      - ./documents:/app/documents:ro
+      # Seed scripts + profiles (host copy; no image rebuild needed for scripts/seed_dev_stack.py)
+      - ./scripts:/app/scripts:ro
+      - ./data:/app/data:ro
     depends_on:
       postgres:
         condition: service_healthy

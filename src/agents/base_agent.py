@@ -9,7 +9,8 @@ import asyncio, hashlib, json, re, time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from uuid import uuid4
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+
 from src.event_store import OptimisticConcurrencyError
 from src.schema.events import AgentInputValidated, AgentInputValidationFailed, AgentType
 
@@ -28,9 +29,11 @@ class BaseApexAgent(ABC):
     Each tool/registry call must call self._record_tool_call().
     The write_output node must call self._record_output_written() then self._record_node_execution().
     """
-    def __init__(self, agent_id: str, agent_type: str, store, registry, client: AsyncAnthropic, model="claude-sonnet-4-20250514"):
+    def __init__(self, agent_id: str, agent_type: str, store, registry, client: AsyncOpenAI, model: str | None = None):
+        from src.llm_client import get_model
         self.agent_id = agent_id; self.agent_type = agent_type
-        self.store = store; self.registry = registry; self.client = client; self.model = model
+        self.store = store; self.registry = registry; self.client = client
+        self.model = model or get_model()
         self.session_id = None; self.application_id = None
         self._session_stream = None; self._t0 = None
         self._seq = 0; self._llm_calls = 0; self._tokens = 0; self._cost = 0.0
@@ -169,13 +172,31 @@ class BaseApexAgent(ABC):
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:
             return {}
-        return json.loads(m.group())
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            for end in range(len(m.group()) - 1, 0, -1):
+                try:
+                    return json.loads(m.group()[:end] + "}")
+                except json.JSONDecodeError:
+                    continue
+            return {}
 
     async def _call_llm(self, system, user, max_tokens=1024):
-        resp = await self.client.messages.create(model=self.model, max_tokens=max_tokens,
-            system=system, messages=[{"role":"user","content":user}])
-        t = resp.content[0].text; i = resp.usage.input_tokens; o = resp.usage.output_tokens
-        return t, i, o, round(i/1e6*3.0 + o/1e6*15.0, 6)
+        resp = await self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        choice = resp.choices[0]
+        t = choice.message.content or ""
+        usage = resp.usage
+        i = usage.prompt_tokens if usage else 0
+        o = usage.completion_tokens if usage else 0
+        return t, i, o, round(i / 1e6 * 3.0 + o / 1e6 * 15.0, 6)
 
     @staticmethod
     def _sha(d): return hashlib.sha256(json.dumps(str(d),sort_keys=True).encode()).hexdigest()[:16]

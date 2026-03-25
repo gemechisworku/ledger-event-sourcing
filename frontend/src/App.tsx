@@ -5,6 +5,7 @@ import { ApplicationDetailPage } from '@/pages/application-detail'
 import { ApplicationsPage } from '@/pages/applications'
 import { DashboardPage } from '@/pages/dashboard'
 import { NotFoundPage } from '@/pages/not-found'
+import { QueryPage } from '@/pages/query'
 import { SettingsPage } from '@/pages/settings'
 
 const router = createBrowserRouter([
@@ -13,6 +14,7 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <DashboardPage /> },
+      { path: 'query', element: <QueryPage /> },
       { path: 'applications', element: <ApplicationsPage /> },
       { path: 'applications/:id/run', element: <ApplicationDetailPage /> },
       { path: 'applications/:id', element: <ApplicationDetailPage /> },

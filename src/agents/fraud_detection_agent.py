@@ -44,7 +44,7 @@ class FraudDetectionAgent(BaseApexAgent):
         store,
         registry,
         client,
-        model: str = "claude-sonnet-4-20250514",
+        model: str | None = None,
         crash_before_complete: bool = False,
     ):
         super().__init__(agent_id, agent_type, store, registry, client, model=model)
@@ -156,8 +156,13 @@ class FraudDetectionAgent(BaseApexAgent):
             },
             default=str,
         )
-        content, ti, to, cost = await self._call_llm(SYSTEM, USER, max_tokens=512)
-        data = self._parse_json(content) or {}
+        try:
+            content, ti, to, cost = await self._call_llm(SYSTEM, USER, max_tokens=1024)
+            data = self._parse_json(content) or {}
+        except Exception:
+            data = {}
+            ti = to = 0
+            cost = 0.0
         score = float(data.get("fraud_score", 0.08))
         score = max(0.0, min(1.0, score))
         rec = str(data.get("recommendation", "CLEAR")).upper()

@@ -98,77 +98,89 @@ async def store():
 
 
 def _llm_json_response() -> MagicMock:
-    """Deterministic credit JSON — no real Anthropic call."""
+    """Deterministic credit JSON — mock for OpenAI SDK format."""
 
     async def fake_create(*_args, **_kwargs):
-        class Usage:
-            input_tokens = 100
-            output_tokens = 200
-
-        class Block:
-            text = (
-                '{"risk_tier":"MEDIUM","recommended_limit_usd":400000,'
-                '"confidence":0.82,"rationale":"Concurrent test run — deterministic JSON.",'
-                '"key_concerns":[],"data_quality_caveats":[],"policy_overrides_applied":[]}'
-            )
-
-        class Resp:
-            content = [Block()]
-            usage = Usage()
-
-        return Resp()
+        msg = MagicMock()
+        msg.content = (
+            '{"risk_tier":"MEDIUM","recommended_limit_usd":400000,'
+            '"confidence":0.82,"rationale":"Concurrent test run — deterministic JSON.",'
+            '"key_concerns":[],"data_quality_caveats":[],"policy_overrides_applied":[]}'
+        )
+        msg.tool_calls = None
+        choice = MagicMock()
+        choice.message = msg
+        choice.finish_reason = "stop"
+        usage = MagicMock()
+        usage.prompt_tokens = 100
+        usage.completion_tokens = 200
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = usage
+        return resp
 
     client = MagicMock()
-    client.messages = MagicMock()
-    client.messages.create = AsyncMock(side_effect=fake_create)
+    completions = MagicMock()
+    completions.create = AsyncMock(side_effect=fake_create)
+    chat = MagicMock()
+    chat.completions = completions
+    client.chat = chat
     return client
 
 
 def _fraud_llm_json_response() -> MagicMock:
     async def fake_create(*_args, **_kwargs):
-        class Usage:
-            input_tokens = 50
-            output_tokens = 80
-
-        class Block:
-            text = (
-                '{"fraud_score":0.1,"recommendation":"CLEAR",'
-                '"anomalies":[{"severity":"LOW","evidence":"none","fields":[]}]}'
-            )
-
-        class Resp:
-            content = [Block()]
-            usage = Usage()
-
-        return Resp()
+        msg = MagicMock()
+        msg.content = (
+            '{"fraud_score":0.1,"recommendation":"CLEAR",'
+            '"anomalies":[{"severity":"LOW","evidence":"none","fields":[]}]}'
+        )
+        msg.tool_calls = None
+        choice = MagicMock()
+        choice.message = msg
+        choice.finish_reason = "stop"
+        usage = MagicMock()
+        usage.prompt_tokens = 50
+        usage.completion_tokens = 80
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = usage
+        return resp
 
     client = MagicMock()
-    client.messages = MagicMock()
-    client.messages.create = AsyncMock(side_effect=fake_create)
+    completions = MagicMock()
+    completions.create = AsyncMock(side_effect=fake_create)
+    chat = MagicMock()
+    chat.completions = completions
+    client.chat = chat
     return client
 
 
 def _orch_llm_decline_response() -> MagicMock:
     async def fake_create(*_args, **_kwargs):
-        class Usage:
-            input_tokens = 60
-            output_tokens = 120
-
-        class Block:
-            text = (
-                '{"recommendation":"DECLINE","confidence":0.72,'
-                '"executive_summary":"Deterministic orchestrator decline for narrative test."}'
-            )
-
-        class Resp:
-            content = [Block()]
-            usage = Usage()
-
-        return Resp()
+        msg = MagicMock()
+        msg.content = (
+            '{"recommendation":"DECLINE","confidence":0.72,'
+            '"executive_summary":"Deterministic orchestrator decline for narrative test."}'
+        )
+        msg.tool_calls = None
+        choice = MagicMock()
+        choice.message = msg
+        choice.finish_reason = "stop"
+        usage = MagicMock()
+        usage.prompt_tokens = 60
+        usage.completion_tokens = 120
+        resp = MagicMock()
+        resp.choices = [choice]
+        resp.usage = usage
+        return resp
 
     client = MagicMock()
-    client.messages = MagicMock()
-    client.messages.create = AsyncMock(side_effect=fake_create)
+    completions = MagicMock()
+    completions.create = AsyncMock(side_effect=fake_create)
+    chat = MagicMock()
+    chat.completions = completions
+    client.chat = chat
     return client
 
 

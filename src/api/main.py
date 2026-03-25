@@ -10,10 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from unittest.mock import AsyncMock, MagicMock
 
 import dotenv
 
@@ -22,58 +20,25 @@ from src.event_store import EventStore
 from src.upcasters import default_upcaster_registry
 
 
-def _build_anthropic_client() -> Any:
-    """Real Anthropic when ANTHROPIC_API_KEY is set; else deterministic mocks for LLM-using agents."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+def _build_llm_client() -> Any:
+    """Real OpenRouter when OPENROUTER_API_KEY is set; mock when MOCK_LLM=true or key missing."""
+    if os.environ.get("MOCK_LLM", "").strip().lower() in ("1", "true", "yes"):
+        from src.llm_client import build_mock_llm_client
+        return build_mock_llm_client()
+
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if key:
-        return AsyncAnthropic(api_key=key)
+        from src.llm_client import build_llm_client
+        return build_llm_client()
 
-    async def fake_create(*_args: Any, **kwargs: Any) -> Any:
-        system = str(kwargs.get("system") or "")
-        user_parts = []
-        for m in kwargs.get("messages") or []:
-            user_parts.append(str(m.get("content", "")))
-        user_blob = " ".join(user_parts).lower()
-        sys_l = system.lower()
-        if "fraud screening assistant" in sys_l or ("fraud_score" in sys_l and "anomalies" in sys_l):
-            text = '{"fraud_score":0.12,"recommendation":"CLEAR","anomalies":[]}'
-        elif "loan orchestrator" in sys_l:
-            text = (
-                '{"recommendation":"REFER","confidence":0.65,'
-                '"executive_summary":"Deterministic API mock — review recommended."}'
-            )
-        else:
-            text = (
-                '{"risk_tier":"MEDIUM","recommended_limit_usd":400000,'
-                '"confidence":0.82,"rationale":"API default deterministic JSON.",'
-                '"key_concerns":[],"data_quality_caveats":[],"policy_overrides_applied":[]}'
-            )
-
-        class Usage:
-            input_tokens = 100
-            output_tokens = 200
-
-        class Block:
-            pass
-
-        Block.text = text
-
-        class Resp:
-            content = [Block()]
-            usage = Usage()
-
-        return Resp()
-
-    client = MagicMock()
-    client.messages = MagicMock()
-    client.messages.create = AsyncMock(side_effect=fake_create)
-    return client
+    from src.llm_client import build_mock_llm_client
+    return build_mock_llm_client()
 
 
 def create_app(
     *,
     store: Any | None = None,
-    anthropic: Any | None = None,
+    llm: Any | None = None,
     jobs: Any | None = None,
 ) -> FastAPI:
     """Create FastAPI app. Pass `store` (e.g. InMemoryEventStore) for tests; otherwise uses DATABASE_URL."""
@@ -82,7 +47,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         if store is not None:
             app.state.store = store
-            app.state.anthropic = anthropic if anthropic is not None else _build_anthropic_client()
+            app.state.llm_client = llm if llm is not None else _build_llm_client()
             app.state.jobs = jobs if jobs is not None else JobRegistry()
         else:
             dotenv.load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -92,7 +57,7 @@ def create_app(
             st = EventStore(url, upcaster_registry=default_upcaster_registry())
             await st.connect()
             app.state.store = st
-            app.state.anthropic = anthropic if anthropic is not None else _build_anthropic_client()
+            app.state.llm_client = llm if llm is not None else _build_llm_client()
             app.state.jobs = jobs if jobs is not None else JobRegistry()
         yield
         if store is None:

@@ -14,5 +14,5 @@ def get_job_registry(request: Request):
     return request.app.state.jobs
 
 
-def get_anthropic(request: Request) -> Any:
-    return request.app.state.anthropic
+def get_llm_client(request: Request) -> Any:
+    return request.app.state.llm_client

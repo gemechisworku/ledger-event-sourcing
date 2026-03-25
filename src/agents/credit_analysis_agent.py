@@ -197,20 +197,43 @@ class CreditAnalysisAgent(BaseApexAgent):
         t = time.time()
         applicant_id = state["applicant_id"]
 
-        # Query Applicant Registry (read-only external database)
-        # TODO: implement RegistryClient methods
-        # profile   = await self.registry.get_company(applicant_id)
-        # financials = await self.registry.get_financial_history(applicant_id)
-        # flags     = await self.registry.get_compliance_flags(applicant_id)
-        # loans     = await self.registry.get_loan_relationships(applicant_id)
+        company = await self.registry.get_company(applicant_id)
+        if company is None:
+            profile = {
+                "company_id": applicant_id, "name": "Unknown",
+                "industry": "unknown", "trajectory": "UNKNOWN",
+                "legal_type": "Unknown", "jurisdiction": "Unknown",
+            }
+        else:
+            profile = {
+                "company_id": company.company_id, "name": company.name,
+                "industry": company.industry, "trajectory": company.trajectory,
+                "legal_type": company.legal_type, "jurisdiction": company.jurisdiction,
+            }
 
-        # PLACEHOLDER
-        profile    = {"company_id": applicant_id, "name": "Company",
-                      "industry": "technology", "trajectory": "STABLE",
-                      "legal_type": "LLC", "jurisdiction": "CA"}
-        financials: list[dict] = []
-        flags:      list[dict] = []
-        loans:      list[dict] = []
+        fin_records = await self.registry.get_financial_history(applicant_id)
+        financials: list[dict] = [
+            {
+                "fiscal_year": f.fiscal_year,
+                "total_revenue": f.total_revenue,
+                "ebitda": f.ebitda,
+                "net_income": f.net_income,
+                "debt_to_equity": f.debt_to_equity,
+                "debt_to_ebitda": f.debt_to_ebitda,
+            }
+            for f in fin_records
+        ]
+
+        flag_records = await self.registry.get_compliance_flags(applicant_id)
+        flags: list[dict] = [
+            {
+                "flag_type": cf.flag_type, "severity": cf.severity,
+                "is_active": cf.is_active, "note": cf.note,
+            }
+            for cf in flag_records
+        ]
+
+        loans: list[dict] = await self.registry.get_loan_relationships(applicant_id)
 
         ms = int((time.time() - t) * 1000)
         await self._record_tool_call(

@@ -2,11 +2,22 @@
 from __future__ import annotations
 
 import json
-from fastapi import APIRouter, HTTPException, Request
+from datetime import datetime
 
-from src.api.schemas import ApplicationCreate, ApplicationListItem, ApplicationListResponse, ApplicationResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from src.api.schemas import (
+    ApplicationCreate,
+    ApplicationListItem,
+    ApplicationListResponse,
+    ApplicationResponse,
+    DecisionHistoryEvent,
+    DecisionHistoryResponse,
+)
 from src.domain.errors import DomainError
 from src.domain.handlers import handle_submit_application
+from src.integrity.audit_chain import run_integrity_check
+from src.projections import ComplianceAuditProjection
 from src.schema.events import LoanPurpose
 
 router = APIRouter()
@@ -116,3 +127,96 @@ async def get_application(application_id: str, request: Request) -> dict:
         "event_count": len(events),
         "events": events,
     }
+
+
+@router.get("/v1/applications/{application_id}/decision-history", response_model=DecisionHistoryResponse)
+async def get_decision_history(application_id: str, request: Request) -> DecisionHistoryResponse:
+    """Complete decision history across all streams for one application."""
+    store = request.app.state.store
+
+    stream_prefixes = ["loan", "credit", "fraud", "compliance", "docpkg"]
+    all_events: list[DecisionHistoryEvent] = []
+    streams_queried: list[str] = []
+
+    for prefix in stream_prefixes:
+        sid = f"{prefix}-{application_id}"
+        streams_queried.append(sid)
+        evs = await store.load_stream(sid)
+        for e in evs:
+            payload = e.payload if isinstance(e.payload, dict) else dict(e.payload or {})
+            all_events.append(
+                DecisionHistoryEvent(
+                    stream_id=sid,
+                    event_type=e.event_type,
+                    stream_position=e.stream_position,
+                    global_position=getattr(e, "global_position", None),
+                    recorded_at=e.recorded_at.isoformat() if e.recorded_at else None,
+                    payload=json.loads(json.dumps(payload, default=str)),
+                )
+            )
+
+    pool = getattr(store, "_pool", None) or getattr(store, "pool", None)
+    if pool is not None:
+        async with pool.acquire() as conn:
+            agent_rows = await conn.fetch(
+                "SELECT stream_id FROM event_streams WHERE stream_id LIKE 'agent-%' AND stream_id LIKE $1",
+                f"%-{application_id}%",
+            )
+        for row in agent_rows:
+            sid = row["stream_id"]
+            if sid not in streams_queried:
+                streams_queried.append(sid)
+                evs = await store.load_stream(sid)
+                for e in evs:
+                    payload = e.payload if isinstance(e.payload, dict) else dict(e.payload or {})
+                    all_events.append(
+                        DecisionHistoryEvent(
+                            stream_id=sid,
+                            event_type=e.event_type,
+                            stream_position=e.stream_position,
+                            global_position=getattr(e, "global_position", None),
+                            recorded_at=e.recorded_at.isoformat() if e.recorded_at else None,
+                            payload=json.loads(json.dumps(payload, default=str)),
+                        )
+                    )
+
+    all_events.sort(key=lambda e: e.global_position if e.global_position is not None else 0)
+
+    integrity = None
+    try:
+        r = await run_integrity_check(store, "loan", application_id)
+        integrity = {
+            "chain_valid": r.chain_valid,
+            "tamper_detected": r.tamper_detected,
+            "events_verified": r.events_verified,
+        }
+    except Exception:
+        pass
+
+    if not all_events:
+        raise HTTPException(status_code=404, detail="No events found for this application")
+
+    return DecisionHistoryResponse(
+        application_id=application_id,
+        total_events=len(all_events),
+        streams_queried=streams_queried,
+        events=all_events,
+        integrity=integrity,
+    )
+
+
+@router.get("/v1/applications/{application_id}/compliance")
+async def get_compliance(
+    application_id: str,
+    request: Request,
+    as_of: str | None = Query(None, description="ISO-8601 timestamp for temporal query"),
+) -> dict:
+    """Current or temporal compliance state for an application."""
+    store = request.app.state.store
+    proj = ComplianceAuditProjection(store)
+    if as_of:
+        ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+        result = await proj.get_compliance_at(application_id, ts)
+    else:
+        result = await proj.get_current_compliance(application_id)
+    return json.loads(json.dumps(result, default=str))

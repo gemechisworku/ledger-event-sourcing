@@ -403,6 +403,12 @@ def build_mcp_server(
         cur = await comp.get_current_compliance(application_id)
         return json.dumps(cur, default=str)
 
+    @mcp.resource("ledger://applications/{application_id}/compliance/at/{as_of_ts}")
+    async def resource_compliance_at(application_id: str, as_of_ts: str) -> str:
+        as_of = datetime.fromisoformat(as_of_ts.replace("Z", "+00:00"))
+        result = await comp.get_compliance_at(application_id, as_of)
+        return json.dumps(result, default=str)
+
     @mcp.resource("ledger://applications/{application_id}/audit-trail")
     async def resource_audit_trail(application_id: str) -> str:
         sid = audit_stream_id("loan", application_id)
