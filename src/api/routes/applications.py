@@ -220,3 +220,38 @@ async def get_compliance(
     else:
         result = await proj.get_current_compliance(application_id)
     return json.loads(json.dumps(result, default=str))
+
+
+@router.get("/v1/applications/{application_id}/compliance/compare")
+async def compliance_compare(
+    application_id: str,
+    request: Request,
+    as_of: str = Query(..., description="ISO-8601 timestamp for temporal comparison"),
+) -> dict:
+    """Side-by-side: current compliance vs compliance at a past point in time."""
+    from src.domain.streams import compliance_stream_id as _csid
+
+    store = request.app.state.store
+    proj = ComplianceAuditProjection(store)
+
+    ts = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    current = await proj.get_current_compliance(application_id)
+    historical = await proj.get_compliance_at(application_id, ts)
+
+    stream = await store.load_stream(_csid(application_id))
+    timeline = [
+        {
+            "event_type": e.event_type,
+            "stream_position": e.stream_position,
+            "recorded_at": str(e.recorded_at) if e.recorded_at else None,
+        }
+        for e in stream
+    ]
+
+    return json.loads(json.dumps({
+        "application_id": application_id,
+        "as_of": as_of,
+        "current": current,
+        "as_of_projection": historical,
+        "compliance_event_timeline": timeline,
+    }, default=str))

@@ -12,6 +12,9 @@ const nav = [
   { to: '/', label: 'Dashboard' },
   { to: '/query', label: 'Ask the Ledger' },
   { to: '/applications', label: 'Applications' },
+  { to: '/agents', label: 'Agent Runs' },
+  { to: '/compliance', label: 'Compliance Audit' },
+  { to: '/events', label: 'Event Inspector' },
   { to: '/settings', label: 'Settings' },
 ]
 

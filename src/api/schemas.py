@@ -1,6 +1,7 @@
 """Pydantic models for REST API."""
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -107,3 +108,44 @@ class NLQueryResponse(BaseModel):
     sources: list[dict[str, Any]] = []
     model: str | None = None
     tokens_used: int | None = None
+
+
+# ── Persisted NL chats ──
+
+class ConversationCreate(BaseModel):
+    title: str | None = None
+
+
+class ConversationPatch(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+
+
+class ConversationSummary(BaseModel):
+    id: str
+    client_session_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+
+
+class ConversationMessageRow(BaseModel):
+    id: str
+    role: str
+    content: str
+    model: str | None = None
+    tokens_used: int | None = None
+    created_at: datetime
+
+
+class ConversationDetailResponse(BaseModel):
+    conversation: ConversationSummary
+    messages: list[ConversationMessageRow]
+
+
+class ConversationListResponse(BaseModel):
+    conversations: list[ConversationSummary]
+
+
+class ConversationQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1)

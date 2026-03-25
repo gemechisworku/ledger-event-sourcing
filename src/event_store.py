@@ -38,6 +38,16 @@ def _schema_sql() -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _chat_ddl_statements() -> list[str]:
+    p = Path(__file__).resolve().parent / "schema" / "chat.sql"
+    parts: list[str] = []
+    for chunk in p.read_text(encoding="utf-8").split(";"):
+        stmt = chunk.strip()
+        if stmt:
+            parts.append(stmt)
+    return parts
+
+
 def _registry_ddl_statements() -> list[str]:
     """Run applicant_registry DDL as separate statements (asyncpg)."""
     parts: list[str] = []
@@ -92,6 +102,8 @@ class EventStore:
             async with pool.acquire() as conn:
                 await conn.execute(_schema_sql())
                 for stmt in _registry_ddl_statements():
+                    await conn.execute(stmt)
+                for stmt in _chat_ddl_statements():
                     await conn.execute(stmt)
             self._pool = pool
         except Exception:
@@ -296,6 +308,19 @@ class EventStore:
             e = upcast_stored_event(self.upcasters, e)
         return e
 
+    async def get_event_raw(self, event_id: UUID) -> StoredEvent | None:
+        """Persisted row as StoredEvent without applying upcasters (read path only)."""
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT event_id, stream_id, stream_position, global_position, event_type, "
+                "event_version, payload, metadata, recorded_at FROM events WHERE event_id = $1",
+                event_id,
+            )
+        if not row:
+            return None
+        return _row_to_event(row)
+
     async def max_global_position(self) -> int:
         assert self._pool is not None
         async with self._pool.acquire() as conn:
@@ -460,6 +485,12 @@ class InMemoryEventStore:
             if e.event_id == event_id:
                 if self.upcasters:
                     return upcast_stored_event(self.upcasters, e)
+                return e
+        return None
+
+    async def get_event_raw(self, event_id: str) -> StoredEvent | None:
+        for e in self._global:
+            if e.event_id == event_id:
                 return e
         return None
 
