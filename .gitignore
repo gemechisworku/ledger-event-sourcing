@@ -7,6 +7,10 @@ __pycache__/
 *.so
 
 documents/
+
+# for repo size reduction only
+frontend/node_modules/
+
 # Distribution / packaging
 .Python
 build/
