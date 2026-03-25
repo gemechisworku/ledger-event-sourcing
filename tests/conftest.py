@@ -33,3 +33,10 @@ def event_store_class():
     """Returns the EventStore class. Swap for real once implemented."""
     from src.event_store import EventStore
     return EventStore
+
+
+@pytest.fixture(autouse=True)
+def _clear_anthropic_key_for_api_http_tests(monkeypatch, request):
+    """FastAPI tests use in-memory store + mock Anthropic; ignore real key from .env."""
+    if request.node.path.name.startswith("test_api_"):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

@@ -77,8 +77,51 @@ If you map another host port (e.g. `-p 5433:5432` because `5432` is busy), only 
 | Projections + daemon | `src/projections/` | 4 |
 | Upcasters | `src/upcasters.py` | 4 |
 | MCP server | `src/mcp_server.py` | 5 |
+| HTTP API (BFF) | `src/api/main.py` | 6 |
+| Frontend (Workbench) | `frontend/` | 8 |
 
 Design and module specs live under [`spec/`](spec/).
+
+### HTTP API (Phase 6)
+
+Requires `DATABASE_URL` (or `TEST_DB_URL`) in the environment unless you inject a store in code. From the repo root:
+
+```bash
+uv run uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+`GET /health` reports store connectivity. Pipeline progress: `POST /v1/applications/{id}/pipeline/run` then `GET /v1/jobs/{job_id}/stream` (SSE).
+
+### Frontend (Phase 8 — Agentic Workbench)
+
+From repo root:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Uses `VITE_API_BASE_URL` (default `http://127.0.0.1:8000`). See [`frontend/README.md`](frontend/README.md) and [`spec/10-frontend/`](spec/10-frontend/).
+
+### Docker Compose (Postgres + API + Workbench UI)
+
+If you run **everything in Docker**, use the repo [`docker-compose.yml`](docker-compose.yml):
+
+```bash
+docker compose up --build
+```
+
+| Service | Port (host) | Notes |
+|---------|-------------|--------|
+| **web** | [http://localhost:8080](http://localhost:8080) | Static SPA; API calls go to `http://127.0.0.1:8000` **on the host** (CORS is preconfigured for `:8080`). |
+| **api** | [http://localhost:8000](http://localhost:8000) | FastAPI; `/docs`, `/health`. |
+| **postgres** | `5432` | `postgres` / `apex` / `apex_ledger` |
+
+The API container uses `DATABASE_URL=...@postgres:5432` (Docker network DNS). **Seed data** (companies, registry, etc.) is not automatic: run [`datagen/generate_all.py`](datagen/generate_all.py) from the host with  
+`postgresql://postgres:apex@127.0.0.1:5432/apex_ledger` after Postgres is up.
+
+Optional: add `ANTHROPIC_API_KEY` by mounting env — see the comment in `docker-compose.yml` (`env_file: [.env]`).
 
 ## Tests by phase
 ```bash
@@ -88,4 +131,5 @@ uv run pytest tests/test_domain.py -v               # Phase 2 (domain; InMemory,
 uv run pytest tests/test_narratives.py -v           # Phase 3
 uv run pytest tests/test_projections.py -v          # Phase 4
 uv run pytest tests/test_mcp.py -v                  # Phase 5
+uv run pytest tests/test_api_health.py tests/test_api_applications.py tests/test_api_pipeline.py -v  # Phase 6
 ```

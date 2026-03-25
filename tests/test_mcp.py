@@ -19,8 +19,10 @@ from src.projections import (
 )
 
 
-def _structured(result):
-    return result.structured_content
+async def _tool_structured(mcp, name: str, args: dict):
+    """FastMCP 2.x: invoke tool and return structured JSON (tests only)."""
+    r = await mcp._tool_manager.call_tool(name, args)
+    return r.structured_content
 
 
 @pytest.mark.asyncio
@@ -32,7 +34,8 @@ async def test_submit_application_tool():
         compliance_audit=ComplianceAuditProjection(store),
         agent_performance=AgentPerformanceLedgerProjection(store),
     )
-    r = await mcp.call_tool(
+    out = await _tool_structured(
+        mcp,
         "submit_application",
         {
             "application_id": "MCP-001",
@@ -46,9 +49,89 @@ async def test_submit_application_tool():
             "application_reference": "REF-1",
         },
     )
-    out = _structured(r)
     assert out.get("ok") is True
     assert out.get("stream_id") == "loan-MCP-001"
+
+
+@pytest.mark.asyncio
+async def test_submit_application_rejects_invalid_loan_purpose():
+    store = InMemoryEventStore()
+    mcp = build_mcp_server(
+        store,
+        application_summary=ApplicationSummaryProjection(store),
+        compliance_audit=ComplianceAuditProjection(store),
+        agent_performance=AgentPerformanceLedgerProjection(store),
+    )
+    out = await _tool_structured(
+        mcp,
+        "submit_application",
+        {
+            "application_id": "MCP-BAD-PURPOSE",
+            "applicant_id": "A1",
+            "requested_amount_usd": "250000",
+            "loan_purpose": "E2E MCP lifecycle test",
+            "loan_term_months": 36,
+            "submission_channel": "mcp",
+            "contact_email": "a@b.c",
+            "contact_name": "Test",
+            "application_reference": "REF-1",
+        },
+    )
+    assert out.get("ok") is not True
+    assert out.get("error_type") == "ValidationError"
+    assert "loan_purpose must be one of:" in (out.get("message") or "")
+    assert "application_reference" in (out.get("message") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_realworld_style_submit_valid_and_invalid_loan_purpose():
+    """
+    Realistic CRM-style fields: valid loan_purpose succeeds; prose in loan_purpose returns ValidationError (no crash).
+    """
+    store = InMemoryEventStore()
+    mcp = build_mcp_server(
+        store,
+        application_summary=ApplicationSummaryProjection(store),
+        compliance_audit=ComplianceAuditProjection(store),
+        agent_performance=AgentPerformanceLedgerProjection(store),
+    )
+
+    out_ok = await _tool_structured(
+        mcp,
+        "submit_application",
+        {
+            "application_id": "APEX-COMM-2026-004821",
+            "applicant_id": "COMP-77341-B",
+            "requested_amount_usd": "1250000",
+            "loan_purpose": "expansion",
+            "loan_term_months": 60,
+            "submission_channel": "relationship_manager",
+            "contact_email": "cfo@midwestfabrication.example.com",
+            "contact_name": "Jordan Lee, CFO",
+            "application_reference": "Working capital + equipment — Q1 2026 expansion (Denver facility)",
+        },
+    )
+    assert out_ok.get("ok") is True
+    assert out_ok.get("stream_id") == "loan-APEX-COMM-2026-004821"
+
+    out_bad = await _tool_structured(
+        mcp,
+        "submit_application",
+        {
+            "application_id": "APEX-COMM-2026-004822",
+            "applicant_id": "COMP-99102-A",
+            "requested_amount_usd": "480000",
+            "loan_purpose": "Purchase inventory and cover payroll for seasonal ramp-up",
+            "loan_term_months": 36,
+            "submission_channel": "online_banking",
+            "contact_email": "treasurer@lakeside-retail.example.org",
+            "contact_name": "Sam Rivera",
+            "application_reference": "INV-2026-044 — seasonal WC line",
+        },
+    )
+    assert out_bad.get("ok") is not True
+    assert out_bad.get("error_type") == "ValidationError"
+    assert "working_capital" in (out_bad.get("message") or "")
 
 
 @pytest.mark.asyncio
@@ -71,7 +154,7 @@ async def test_lifecycle_tools_only():
     app_id = "MCP-LIFE-1"
 
     async def call(name: str, args: dict):
-        return _structured(await mcp.call_tool(name, args))
+        return await _tool_structured(mcp, name, args)
 
     assert (await call("submit_application", {"application_id": app_id, "applicant_id": "A1", "requested_amount_usd": "100000", "loan_purpose": "working_capital", "loan_term_months": 12, "submission_channel": "mcp", "contact_email": "x@y.z", "contact_name": "T", "application_reference": "R1"}))["ok"]
 
@@ -161,11 +244,11 @@ async def test_lifecycle_tools_only():
 
     await daemon.process_batch()
 
-    rr = await mcp.read_resource("ledger://applications/MCP-LIFE-1/compliance")
-    assert rr.contents[0].content
+    rr = await mcp._read_resource_mcp("ledger://applications/MCP-LIFE-1/compliance")
+    assert rr[0].content
 
-    r_app = await mcp.read_resource("ledger://applications/MCP-LIFE-1")
-    text = r_app.contents[0].content
+    r_app = await mcp._read_resource_mcp("ledger://applications/MCP-LIFE-1")
+    text = r_app[0].content
     assert "MCP-LIFE-1" in text or "SUBMITTED" in text or "application_id" in text
 
 
@@ -173,7 +256,7 @@ async def test_lifecycle_tools_only():
 async def test_integrity_rate_limit():
     store = InMemoryEventStore()
     mcp = build_mcp_server(store)
-    r1 = _structured(await mcp.call_tool("run_integrity_check", {"entity_type": "loan", "entity_id": "RATE"}))
+    r1 = await _tool_structured(mcp, "run_integrity_check", {"entity_type": "loan", "entity_id": "RATE"})
     assert r1.get("ok") is True
-    r2 = _structured(await mcp.call_tool("run_integrity_check", {"entity_type": "loan", "entity_id": "RATE"}))
+    r2 = await _tool_structured(mcp, "run_integrity_check", {"entity_type": "loan", "entity_id": "RATE"})
     assert r2.get("error_type") == "PreconditionFailed"

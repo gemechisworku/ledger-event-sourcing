@@ -18,6 +18,7 @@ Modular **design specs** derived from [`../ref_docs/requirements.md`](../ref_doc
 | [`07-mcp-layer/`](07-mcp-layer/) | Tools, resources, LLM errors |
 | [`08-bonus-phase6/`](08-bonus-phase6/) | What-if, regulatory package |
 | [`09-documentation/`](09-documentation/) | Test strategy, `DESIGN.md` outline |
+| [`10-frontend/`](10-frontend/) | Agentic Workbench UI (React + Tailwind): workflow viz, logs, theming |
 | [`mappings/`](mappings/) | `src/` tree layout |
 
 ## Repo layout

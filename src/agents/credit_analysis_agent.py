@@ -124,19 +124,16 @@ class CreditAnalysisAgent(BaseApexAgent):
         app_id = state["application_id"]
         errors = []
 
-        # Load LoanApplicationAggregate to get applicant_id and amounts
-        # TODO: implement LoanApplicationAggregate.load()
-        # app = await LoanApplicationAggregate.load(self.store, app_id)
-        # if app.state not in (ApplicationState.DOCUMENTS_PROCESSED, ApplicationState.CREDIT_ANALYSIS_REQUESTED):
-        #     errors.append(f"Expected DOCUMENTS_PROCESSED, got {app.state}")
-        # state["applicant_id"]         = app.applicant_id
-        # state["requested_amount_usd"] = float(app.requested_amount_usd)
-        # state["loan_purpose"]         = app.loan_purpose.value
-
-        # PLACEHOLDER — remove when LoanApplicationAggregate is implemented
-        state["applicant_id"]         = f"COMP-001"
-        state["requested_amount_usd"] = 500_000.0
-        state["loan_purpose"]         = "working_capital"
+        loan_evs = await self.store.load_stream(f"loan-{app_id}")
+        sub = next((e for e in loan_evs if e.event_type == "ApplicationSubmitted"), None)
+        if not sub:
+            errors.append("ApplicationSubmitted missing on loan stream")
+        else:
+            p = sub.payload or {}
+            state["applicant_id"] = str(p.get("applicant_id") or "")
+            state["requested_amount_usd"] = float(p.get("requested_amount_usd") or 0)
+            lp = p.get("loan_purpose")
+            state["loan_purpose"] = lp if isinstance(lp, str) else getattr(lp, "value", str(lp or "working_capital"))
 
         # Verify package is ready
         # TODO: pkg = await DocumentPackageAggregate.load(self.store, app_id)

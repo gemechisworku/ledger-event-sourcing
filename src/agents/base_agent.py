@@ -1,7 +1,7 @@
 """
 src/agents/base_agent.py
 ===========================
-BASE LANGGRAPH AGENT + re-exports for the four non-credit agents (implemented in sibling modules).
+BASE LANGGRAPH AGENT for Apex agents (implemented in sibling modules).
 See `src/agents/credit_analysis_agent.py` for the reference CreditAnalysisAgent.
 """
 from __future__ import annotations
@@ -181,17 +181,8 @@ class BaseApexAgent(ABC):
     def _sha(d): return hashlib.sha256(json.dumps(str(d),sort_keys=True).encode()).hexdigest()[:16]
 
 
-from src.agents.compliance_agent import ComplianceAgent  # noqa: E402
-from src.agents.decision_orchestrator_agent import DecisionOrchestratorAgent  # noqa: E402
-from src.agents.document_processing_agent import DocumentProcessingAgent  # noqa: E402
-from src.agents.fraud_detection_agent import FraudDetectionAgent  # noqa: E402
-
 __all__ = [
     "BaseApexAgent",
-    "DocumentProcessingAgent",
-    "FraudDetectionAgent",
-    "ComplianceAgent",
-    "DecisionOrchestratorAgent",
     "LANGGRAPH_VERSION",
     "MAX_OCC_RETRIES",
 ]

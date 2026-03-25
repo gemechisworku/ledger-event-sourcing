@@ -14,6 +14,7 @@ from uuid import UUID
 
 import asyncpg
 
+from src.registry.schema import REGISTRY_SQL
 from src.schema.events import StoredEvent, StreamMetadata
 from src.upcasters import UpcasterRegistry, upcast_stored_event
 
@@ -35,6 +36,16 @@ class OptimisticConcurrencyError(Exception):
 def _schema_sql() -> str:
     p = Path(__file__).resolve().parent / "schema.sql"
     return p.read_text(encoding="utf-8")
+
+
+def _registry_ddl_statements() -> list[str]:
+    """Run applicant_registry DDL as separate statements (asyncpg)."""
+    parts: list[str] = []
+    for chunk in REGISTRY_SQL.split(";"):
+        stmt = chunk.strip()
+        if stmt:
+            parts.append(stmt)
+    return parts
 
 
 def _aggregate_type(stream_id: str) -> str:
@@ -80,6 +91,8 @@ class EventStore:
         try:
             async with pool.acquire() as conn:
                 await conn.execute(_schema_sql())
+                for stmt in _registry_ddl_statements():
+                    await conn.execute(stmt)
             self._pool = pool
         except Exception:
             await pool.close()

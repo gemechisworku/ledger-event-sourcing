@@ -102,14 +102,41 @@
 
 ---
 
-## Phase 6 — Optional extensions
+## Phase 6 — FastAPI BFF (frontend + SSE progress)
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 6.1 | What-if projector | [`08-bonus-phase6/what-if.md`](08-bonus-phase6/what-if.md) | No writes to prod store; demo scenario | [ ] |
-| 6.2 | Regulatory package | [`08-bonus-phase6/regulatory-package.md`](08-bonus-phase6/regulatory-package.md) | JSON export self-consistent | [ ] |
+| 6.1 | Plan | [`08-api-layer/fastapi-bff-plan.md`](08-api-layer/fastapi-bff-plan.md) | Async FastAPI, SSE pipeline progress | [x] |
+| 6.2 | Gate | — | `uv run pytest tests/test_api_*.py -v` + `/health` via TestClient | [x] |
 
-**Only after Phase 4–5 stable.**
+**Primary code:** `src/api/` (new). Coexists with MCP.
+
+---
+
+## Phase 7 — Optional extensions
+
+| # | Task | Spec / detail | Verification | Done |
+|---|------|---------------|--------------|------|
+| 7.1 | What-if projector | [`08-bonus-phase6/what-if.md`](08-bonus-phase6/what-if.md) | No writes to prod store; demo scenario | [ ] |
+| 7.2 | Regulatory package | [`08-bonus-phase6/regulatory-package.md`](08-bonus-phase6/regulatory-package.md) | JSON export self-consistent | [ ] |
+
+**Only after Phase 4–5 stable; API (Phase 6) can proceed in parallel for product work.**
+
+---
+
+## Phase 8 — Agentic Workbench UI (React + Tailwind)
+
+| # | Task | Spec / detail | Verification | Done |
+|---|------|---------------|--------------|------|
+| 8.1 | UI spec | [`10-frontend/agentic-workbench-ui-spec.md`](10-frontend/agentic-workbench-ui-spec.md) | Goals + IA + library choices agreed | [x] |
+| 8.2 | Implementation plan | [`10-frontend/implementation-plan.md`](10-frontend/implementation-plan.md) | Phases F0–F8 + optional backend slices | [x] |
+| 8.3 | Bootstrap | `frontend/` Vite + TS + Tailwind + shadcn + router + theme | `npm run build` in `frontend/` | [x] |
+| 8.4 | Shell & data | Sidebar, dashboard health, create/list apps, application detail | Manual smoke vs BFF | [x] |
+| 8.5 | Pipeline UX | Run + SSE logs + React Flow stages | Full run visible end-to-end | [x] |
+| 8.6 | Inspector & docs | Stage inspector (SSE + loan stream); `frontend/README.md` + root README link | Checklist in implementation plan | [x] |
+| 8.7 | Gate | — | `npm run lint` + `npm run build`; manual E2E per verification matrix in [`10-frontend/implementation-plan.md`](10-frontend/implementation-plan.md) | [x] |
+
+**Primary code:** `frontend/` (new). **Depends on:** Phase 6 BFF running (`DATABASE_URL`, CORS for dev origin).
 
 ---
 
@@ -137,6 +164,9 @@ _Add a row when you complete a phase or merge a significant chunk._
 | 2026-03-25 | **Phase 3 (partial):** `BaseApexAgent` now appends agent-session events and implements `_append_with_retry` (OCC). `CreditAnalysisAgent` uses idempotent `CreditRecordOpened` / `CreditAnalysisCompleted` + single `FraudScreeningRequested`. **NARR-01** implemented in `tests/test_narratives.py` (requires PostgreSQL; skips if DB unreachable). |
 | 2026-03-25 | **Phase 4 complete:** `src/projections/` (daemon, ApplicationSummary, AgentPerformanceLedger, ComplianceAuditView), `src/upcasters.py` + `EventStore` load-path upcasting, `src/integrity/audit_chain.py`, `src/gas_town.py`. Schema: `projection_*` tables in `schema.sql`. Checkpoints default to **-1** (none processed). Gates: `tests/test_projections.py`, `tests/test_upcasting.py`, `tests/test_gas_town.py`, `tests/test_integrity.py`. |
 | 2026-03-25 | **Phase 5 complete:** [`src/mcp_server.py`](../src/mcp_server.py) — FastMCP: 8 tools (submit_application, start_agent_session, record_credit_analysis, record_fraud_screening, record_compliance_check, generate_decision, record_human_review, run_integrity_check), 6 resources, structured error dicts, integrity rate limit. `handle_record_fraud_screening` in `handlers.py`. `python -m src.mcp_server` for stdio (needs `DATABASE_URL`). Gate: `pytest tests/test_mcp.py`. |
+| 2026-03-25 | **Phase 6 complete:** [`src/api/`](../src/api/) — FastAPI BFF: `POST /v1/applications`, `GET /v1/applications/{id}`, `POST …/pipeline/run` + `GET /v1/jobs/{id}/stream` (SSE). In-memory tests use mock Anthropic via `tests/conftest.py`; production needs `DATABASE_URL` or inject `EventStore`. Gate: `pytest tests/test_api_*.py`. |
+| 2026-03-25 | **Phase 8 plan added:** [`10-frontend/implementation-plan.md`](10-frontend/implementation-plan.md) — Vite React SPA (F0–F8): shell, TanStack Query, pipeline SSE logs, React Flow, inspector; optional backend list/timeline endpoints. |
+| 2026-03-25 | **Phase 8 complete:** [`frontend/`](../frontend/) — Vite + React Router + TanStack Query + Zustand + `@xyflow/react` + virtualized SSE log panel; sidebar + dark/light (`next-themes`); applications CRUD form, command center with pipeline run, graph, inspector, loan stream JSON. Gate: `cd frontend && npm run build && npm run lint`. |
 
 ---
 

@@ -42,6 +42,11 @@ from src.projections import (
 from src.schema.events import AgentType, CreditDecision, LoanPurpose, RiskTier
 from src.upcasters import default_upcaster_registry
 
+_LOAN_PURPOSE_DOC = (
+    "working_capital | equipment_financing | real_estate | expansion | "
+    "refinancing | acquisition | bridge"
+)
+
 
 def _err(
     error_type: str,
@@ -94,7 +99,10 @@ def build_mcp_server(
         description=(
             "Append ApplicationSubmitted to loan-{application_id}. "
             "Precondition: application_id must not already exist. "
-            "Returns stream_id and new version."
+            "Returns stream_id and new version. "
+            "loan_purpose MUST be exactly one of these snake_case values (not a sentence): "
+            f"{_LOAN_PURPOSE_DOC}. "
+            "Use application_reference for free-text labels like 'E2E test'."
         ),
     )
     async def submit_application(
@@ -109,7 +117,15 @@ def build_mcp_server(
         application_reference: str,
     ) -> dict[str, Any]:
         try:
-            lp = LoanPurpose(loan_purpose)
+            try:
+                lp = LoanPurpose(loan_purpose)
+            except ValueError:
+                allowed = ", ".join(sorted(p.value for p in LoanPurpose))
+                return _err(
+                    "ValidationError",
+                    f"loan_purpose must be one of: {allowed}. "
+                    f"Received {loan_purpose!r}. Use application_reference for descriptive text.",
+                )
             await handle_submit_application(
                 store,
                 application_id=application_id,
