@@ -64,8 +64,8 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 3.1 | Agents on `base_agent.py` | [`04-domain-model/README.md`](04-domain-model/README.md), README roadmap | Fraud, compliance, orchestrator, doc processing per roadmap | [~] |
-| 3.2 | Gate | — | `uv run pytest tests/test_narratives.py -v` | [~] |
+| 3.1 | Agents on `base_agent.py` | [`04-domain-model/README.md`](04-domain-model/README.md), README roadmap | Fraud, compliance, orchestrator, doc processing per roadmap | [x] |
+| 3.2 | Gate | — | `uv run pytest tests/test_narratives.py -v` | [x] |
 
 **Primary code:** `src/agents/base_agent.py`, `src/agents/*`.
 
@@ -92,11 +92,11 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 5.1 | Eight tools | [`07-mcp-layer/tools-spec.md`](07-mcp-layer/tools-spec.md) | Each tool validates + appends | [ ] |
-| 5.2 | Six resources | [`07-mcp-layer/resources-spec.md`](07-mcp-layer/resources-spec.md) | Reads from projections / justified stream loads | [ ] |
-| 5.3 | Structured errors | [`07-mcp-layer/errors-for-llms.md`](07-mcp-layer/errors-for-llms.md) | Typed errors + preconditions in descriptions | [ ] |
-| 5.4 | Lifecycle integration | [`07-mcp-layer/architecture.md`](07-mcp-layer/architecture.md) | Full flow via MCP only | [ ] |
-| 5.5 | Gate | — | `uv run pytest tests/test_mcp.py -v` (+ `test_mcp_lifecycle` if split) | [ ] |
+| 5.1 | Eight tools | [`07-mcp-layer/tools-spec.md`](07-mcp-layer/tools-spec.md) | Each tool validates + appends | [x] |
+| 5.2 | Six resources | [`07-mcp-layer/resources-spec.md`](07-mcp-layer/resources-spec.md) | Reads from projections / justified stream loads | [x] |
+| 5.3 | Structured errors | [`07-mcp-layer/errors-for-llms.md`](07-mcp-layer/errors-for-llms.md) | Typed errors + preconditions in descriptions | [x] |
+| 5.4 | Lifecycle integration | [`07-mcp-layer/architecture.md`](07-mcp-layer/architecture.md) | Full flow via MCP only | [x] |
+| 5.5 | Gate | — | `uv run pytest tests/test_mcp.py -v` (+ `test_mcp_lifecycle` if split) | [x] |
 
 **Primary code:** `src/mcp_server.py`.
 
@@ -136,6 +136,7 @@ _Add a row when you complete a phase or merge a significant chunk._
 | 2026-03-21 | **Phase 2 complete:** `src/domain/aggregates/*` (LoanApplication, AgentSession, ComplianceRecord, AuditLedger), `src/domain/handlers.py`, `src/domain/streams.py`. Business rules: Gas Town (first event `AgentSessionStarted`), confidence floor REFER, contributing sessions, second credit + human override, compliance before approval. Gate: `pytest tests/test_domain.py` **8 passed** (InMemory). |
 | 2026-03-25 | **Phase 3 (partial):** `BaseApexAgent` now appends agent-session events and implements `_append_with_retry` (OCC). `CreditAnalysisAgent` uses idempotent `CreditRecordOpened` / `CreditAnalysisCompleted` + single `FraudScreeningRequested`. **NARR-01** implemented in `tests/test_narratives.py` (requires PostgreSQL; skips if DB unreachable). |
 | 2026-03-25 | **Phase 4 complete:** `src/projections/` (daemon, ApplicationSummary, AgentPerformanceLedger, ComplianceAuditView), `src/upcasters.py` + `EventStore` load-path upcasting, `src/integrity/audit_chain.py`, `src/gas_town.py`. Schema: `projection_*` tables in `schema.sql`. Checkpoints default to **-1** (none processed). Gates: `tests/test_projections.py`, `tests/test_upcasting.py`, `tests/test_gas_town.py`, `tests/test_integrity.py`. |
+| 2026-03-25 | **Phase 5 complete:** [`src/mcp_server.py`](../src/mcp_server.py) — FastMCP: 8 tools (submit_application, start_agent_session, record_credit_analysis, record_fraud_screening, record_compliance_check, generate_decision, record_human_review, run_integrity_check), 6 resources, structured error dicts, integrity rate limit. `handle_record_fraud_screening` in `handlers.py`. `python -m src.mcp_server` for stdio (needs `DATABASE_URL`). Gate: `pytest tests/test_mcp.py`. |
 
 ---
 

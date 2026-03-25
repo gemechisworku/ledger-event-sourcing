@@ -383,6 +383,16 @@ class QualityAssessmentCompleted(BaseEvent):
     auditor_notes: str
     assessed_at: datetime
 
+class DocumentQualityFlagged(BaseEvent):
+    """Emitted when critical fields are missing or quality gates fail (doc package)."""
+    event_type: str = "DocumentQualityFlagged"
+    package_id: str
+    application_id: str
+    document_id: str
+    critical_missing_fields: list[str] = Field(default_factory=list)
+    flag_reason: str
+    flagged_at: datetime
+
 class PackageReadyForAnalysis(BaseEvent):
     event_type: str = "PackageReadyForAnalysis"
     package_id: str
@@ -678,6 +688,7 @@ EVENT_REGISTRY: dict[str, type[BaseEvent]] = {
     "ExtractionCompleted": ExtractionCompleted,
     "ExtractionFailed": ExtractionFailed,
     "QualityAssessmentCompleted": QualityAssessmentCompleted,
+    "DocumentQualityFlagged": DocumentQualityFlagged,
     "PackageReadyForAnalysis": PackageReadyForAnalysis,
     # AgentSession
     "AgentSessionStarted": AgentSessionStarted,

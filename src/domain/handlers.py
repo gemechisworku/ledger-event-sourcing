@@ -43,6 +43,7 @@ from src.schema.events import (
     FraudScreeningCompleted,
     FraudScreeningInitiated,
     HumanReviewCompleted,
+    HumanReviewRequested,
     LoanPurpose,
 )
 
@@ -239,6 +240,64 @@ async def handle_fraud_pipeline(
     )
 
 
+async def handle_record_fraud_screening(
+    store: Any,
+    *,
+    application_id: str,
+    session_id: str,
+    fraud_score: float,
+    risk_level: str = "LOW",
+    anomalies_found: int = 0,
+    recommendation: str = "CLEAR",
+    screening_model_version: str = "fraud-v1",
+    input_data_hash: str = "fraud-hash",
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
+) -> None:
+    """Append fraud initiated + completed with caller-supplied score (MCP / tests)."""
+    if not 0.0 <= fraud_score <= 1.0:
+        raise DomainError("fraud_score must be between 0.0 and 1.0")
+    app = await LoanApplicationAggregate.load(store, application_id)
+    if app.state is None:
+        raise DomainError("Cannot record fraud screening for non-existent application")
+
+    fs = fraud_stream_id(application_id)
+    v = await store.stream_version(fs)
+    await store.append(
+        fs,
+        [
+            FraudScreeningInitiated(
+                application_id=application_id,
+                session_id=session_id,
+                screening_model_version=screening_model_version,
+                initiated_at=datetime.now(timezone.utc),
+            ).to_store_dict()
+        ],
+        expected_version=v,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
+    v2 = await store.stream_version(fs)
+    ev = FraudScreeningCompleted(
+        application_id=application_id,
+        session_id=session_id,
+        fraud_score=fraud_score,
+        risk_level=risk_level,
+        anomalies_found=anomalies_found,
+        recommendation=recommendation,
+        screening_model_version=screening_model_version,
+        input_data_hash=input_data_hash,
+        completed_at=datetime.now(timezone.utc),
+    )
+    await store.append(
+        fs,
+        [ev.to_store_dict()],
+        expected_version=v2,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
+
+
 async def handle_compliance_pipeline(
     store: Any,
     *,
@@ -343,6 +402,35 @@ async def handle_decision_generated(
     )
 
 
+async def handle_human_review_requested(
+    store: Any,
+    *,
+    application_id: str,
+    reason: str,
+    decision_event_id: str,
+    assigned_to: str | None = None,
+    correlation_id: str | None = None,
+    causation_id: str | None = None,
+) -> None:
+    """Append HumanReviewRequested (e.g. mandatory review after orchestrator DECLINE)."""
+    app = await LoanApplicationAggregate.load(store, application_id)
+
+    ev = HumanReviewRequested(
+        application_id=application_id,
+        reason=reason,
+        decision_event_id=decision_event_id,
+        assigned_to=assigned_to,
+        requested_at=datetime.now(timezone.utc),
+    )
+    await store.append(
+        loan_stream_id(application_id),
+        [ev.to_store_dict()],
+        expected_version=app.version,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
+
+
 async def handle_human_review_completed(
     store: Any,
     *,
@@ -351,7 +439,7 @@ async def handle_human_review_completed(
     override: bool,
     original_recommendation: str,
     final_decision: str,
-    override_reason: str | None,
+    override_reason: str | None = None,
     correlation_id: str | None = None,
     causation_id: str | None = None,
 ) -> None:
@@ -383,6 +471,7 @@ async def handle_application_approved(
     approved_amount_usd: Decimal,
     interest_rate_pct: float = 7.5,
     term_months: int = 60,
+    conditions: list[str] | None = None,
     approved_by: str = "system",
     effective_date: str = "2026-04-01",
     correlation_id: str | None = None,
@@ -399,6 +488,7 @@ async def handle_application_approved(
         approved_amount_usd=approved_amount_usd,
         interest_rate_pct=interest_rate_pct,
         term_months=term_months,
+        conditions=list(conditions or []),
         approved_by=approved_by,
         effective_date=effective_date,
         approved_at=datetime.now(timezone.utc),

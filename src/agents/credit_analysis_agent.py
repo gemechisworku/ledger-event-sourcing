@@ -449,6 +449,21 @@ Provide your analysis as JSON."""
                 d["confidence"] = 0.50
                 viols.append("POLICY_COMPLIANCE_FLAG: confidence capped at 0.50")
 
+        # Policy 4: critical missing EBITDA from document quality → confidence cap + caveats
+        qf = state.get("quality_flags") or []
+        ebitda_critical = any(
+            "ebitda" in str(x).lower() and ("critical" in str(x).lower() or "CRITICAL_MISSING" in str(x))
+            for x in qf
+        )
+        if ebitda_critical:
+            if d.get("confidence", 0) > 0.75:
+                d["confidence"] = 0.75
+                viols.append("POLICY_DOC_QUALITY: confidence capped at 0.75 (EBITDA missing)")
+            caveats = list(d.get("data_quality_caveats") or [])
+            if not any("ebitda" in c.lower() for c in caveats):
+                caveats.append("EBITDA missing or not extracted from submitted income statement")
+            d["data_quality_caveats"] = caveats
+
         if viols:
             d["policy_overrides_applied"] = d.get("policy_overrides_applied", []) + viols
 
