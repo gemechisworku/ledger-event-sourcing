@@ -9,7 +9,14 @@ __pycache__/
 documents/
 
 # for repo size reduction only
-frontend/node_modules/
+frontend/
+artifacts/
+data/
+datagen/
+ref_docs/
+scripts/
+spec/
+
 
 # Distribution / packaging
 .Python
