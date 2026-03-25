@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+_UTC = timezone.utc
 
 from src.domain.streams import compliance_stream_id
 from src.projections.base import Projection
@@ -74,7 +76,14 @@ class ComplianceAuditProjection(Projection):
         await self._save_row(app_id, row)
 
     async def get_current_compliance(self, application_id: str) -> dict[str, Any]:
-        return await self._load_row(application_id)
+        row = await self._load_row(application_id)
+        if row:
+            return row
+        # Projection table empty (daemon hasn't run) — derive from stream replay.
+        return await self.get_compliance_at(
+            application_id,
+            datetime(9999, 12, 31, 23, 59, 59, tzinfo=_UTC),
+        )
 
     async def get_compliance_at(self, application_id: str, as_of: datetime) -> dict[str, Any]:
         """Replay compliance stream up to as_of (inclusive)."""
