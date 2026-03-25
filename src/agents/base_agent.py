@@ -2,16 +2,19 @@
 src/agents/base_agent.py
 ===========================
 BASE LANGGRAPH AGENT + all 5 agent class stubs.
-CreditAnalysisAgent is the reference implementation with full LangGraph pattern.
+See `src/agents/credit_analysis_agent.py` for the reference CreditAnalysisAgent.
 The other 4 agents are stubs with complete docstrings for implementation.
 """
 from __future__ import annotations
-import asyncio, hashlib, json, time
+import asyncio, hashlib, json, re, time
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 from anthropic import AsyncAnthropic
 from langgraph.graph import StateGraph, END
+
+from src.event_store import OptimisticConcurrencyError
+from src.schema.events import AgentInputValidated, AgentInputValidationFailed, AgentType
 
 LANGGRAPH_VERSION = "1.0.0"
 MAX_OCC_RETRIES = 5
@@ -85,11 +88,14 @@ class BaseApexAgent(ABC):
 
     async def _complete_session(self, result):
         ms = int((time.time()-self._t0)*1000)
+        next_tr = result.get("next_agent_triggered")
+        if next_tr is None:
+            next_tr = result.get("next_agent")
         await self._append_session({"event_type":"AgentSessionCompleted","event_version":1,"payload":{
             "session_id":self.session_id,"agent_type":self.agent_type,"application_id":self.application_id,
             "total_nodes_executed":self._seq,"total_llm_calls":self._llm_calls,"total_tokens_used":self._tokens,
             "total_cost_usd":round(self._cost,6),"total_duration_ms":ms,
-            "next_agent_triggered":result.get("next_agent_triggered"),"completed_at":datetime.now().isoformat()}})
+            "next_agent_triggered":next_tr,"completed_at":datetime.now().isoformat()}})
 
     async def _fail_session(self, etype, emsg):
         await self._append_session({"event_type":"AgentSessionFailed","event_version":1,"payload":{
@@ -97,22 +103,72 @@ class BaseApexAgent(ABC):
             "error_type":etype,"error_message":emsg[:500],"last_successful_node":f"node_{self._seq}",
             "recoverable":etype in ("llm_timeout","RateLimitError"),"failed_at":datetime.now().isoformat()}})
 
-    async def _append_session(self, event: dict):
-        """TODO: replace print with actual EventStore.append() call"""
-        print(f"  [{self.agent_type[:8]}:{self.session_id}] {event['event_type']}")
+    def _agent_type_enum(self) -> AgentType:
+        if isinstance(self.agent_type, AgentType):
+            return self.agent_type
+        return AgentType(self.agent_type)
 
-    async def _append_stream(self, stream_id: str, event_dict: dict, causation_id: str = None):
-        """Append to any aggregate stream with OCC retry."""
+    async def _append_session(self, event: dict) -> None:
+        assert self._session_stream is not None
+        await self._append_with_retry(self._session_stream, [event])
+
+    async def _record_input_validated(self, inputs_validated: list[str], duration_ms: int) -> None:
+        ev = AgentInputValidated(
+            session_id=self.session_id,
+            agent_type=self._agent_type_enum(),
+            application_id=self.application_id,
+            inputs_validated=inputs_validated,
+            validation_duration_ms=duration_ms,
+            validated_at=datetime.now(timezone.utc),
+        )
+        await self._append_session(ev.to_store_dict())
+
+    async def _record_input_failed(self, missing_inputs: list[str], validation_errors: list[str]) -> None:
+        ev = AgentInputValidationFailed(
+            session_id=self.session_id,
+            agent_type=self._agent_type_enum(),
+            application_id=self.application_id,
+            missing_inputs=missing_inputs,
+            validation_errors=validation_errors,
+            failed_at=datetime.now(timezone.utc),
+        )
+        await self._append_session(ev.to_store_dict())
+
+    async def _append_with_retry(
+        self,
+        stream_id: str,
+        events: list[dict],
+        causation_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> list[int]:
+        """Append one or more events with OCC retry (reload version on conflict)."""
+        if not events:
+            return []
         for attempt in range(MAX_OCC_RETRIES):
             try:
                 ver = await self.store.stream_version(stream_id)
-                await self.store.append(stream_id=stream_id, events=[event_dict],
-                    expected_version=ver, causation_id=causation_id)
-                return
-            except Exception as e:
-                if "OptimisticConcurrencyError" in type(e).__name__ and attempt < MAX_OCC_RETRIES-1:
-                    await asyncio.sleep(0.1 * (2**attempt)); continue
-                raise
+                return await self.store.append(
+                    stream_id,
+                    events,
+                    expected_version=ver,
+                    causation_id=causation_id,
+                    correlation_id=correlation_id,
+                )
+            except OptimisticConcurrencyError:
+                if attempt >= MAX_OCC_RETRIES - 1:
+                    raise
+                await asyncio.sleep(0.05 * (2**attempt))
+
+    async def _append_stream(self, stream_id: str, event_dict: dict, causation_id: str = None):
+        """Append a single event with OCC retry."""
+        await self._append_with_retry(stream_id, [event_dict], causation_id=causation_id)
+
+    @staticmethod
+    def _parse_json(text: str) -> dict:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            return {}
+        return json.loads(m.group())
 
     async def _call_llm(self, system, user, max_tokens=1024):
         resp = await self.client.messages.create(model=self.model, max_tokens=max_tokens,
@@ -122,146 +178,6 @@ class BaseApexAgent(ABC):
 
     @staticmethod
     def _sha(d): return hashlib.sha256(json.dumps(str(d),sort_keys=True).encode()).hexdigest()[:16]
-
-
-class CreditAnalysisAgent(BaseApexAgent):
-    """
-    Reference implementation. LangGraph nodes:
-      validate_inputs → open_credit_record → load_applicant_registry
-      → load_extracted_facts → analyze_credit_risk → apply_policy_constraints → write_output
-
-    Output streams:
-      credit-{id}: CreditRecordOpened, HistoricalProfileConsumed, ExtractedFactsConsumed, CreditAnalysisCompleted
-      loan-{id}: FraudScreeningRequested  (triggers next agent)
-    """
-    def build_graph(self):
-        from typing import TypedDict
-        class S(TypedDict):
-            application_id: str; session_id: str; agent_id: str
-            applicant_id: str | None; requested_amount_usd: float | None; loan_purpose: str | None
-            historical_financials: list | None; company_profile: dict | None
-            compliance_flags: list | None; loan_history: list | None
-            extracted_facts: dict | None; quality_flags: list | None
-            credit_decision: dict | None; policy_violations: list | None
-            errors: list; output_events_written: list; next_agent_triggered: str | None
-
-        g = StateGraph(S)
-        for name, fn in [
-            ("validate_inputs",          self._node_validate_inputs),
-            ("open_credit_record",       self._node_open_credit_record),
-            ("load_applicant_registry",  self._node_load_registry),
-            ("load_extracted_facts",     self._node_load_facts),
-            ("analyze_credit_risk",      self._node_analyze),
-            ("apply_policy_constraints", self._node_policy),
-            ("write_output",             self._node_write),
-        ]: g.add_node(name, fn)
-        g.set_entry_point("validate_inputs")
-        g.add_edge("validate_inputs","open_credit_record")
-        g.add_edge("open_credit_record","load_applicant_registry")
-        g.add_edge("load_applicant_registry","load_extracted_facts")
-        g.add_edge("load_extracted_facts","analyze_credit_risk")
-        g.add_edge("analyze_credit_risk","apply_policy_constraints")
-        g.add_edge("apply_policy_constraints","write_output")
-        g.add_edge("write_output", END)
-        return g.compile()
-
-    async def _node_validate_inputs(self, state):
-        t = time.time()
-        # TODO: Load LoanApplicationAggregate, verify state == DOCUMENTS_PROCESSED
-        # TODO: Load applicant_id, requested_amount, loan_purpose from ApplicationSubmitted event
-        # TODO: Verify PackageReadyForAnalysis event exists in docpkg stream
-        # PLACEHOLDER:
-        state = {**state, "applicant_id": f"COMP-001", "requested_amount_usd": 500_000.0, "loan_purpose": "working_capital"}
-        await self._record_node_execution("validate_inputs",["application_id"],["applicant_id","requested_amount_usd","loan_purpose"],int((time.time()-t)*1000))
-        return state
-
-    async def _node_open_credit_record(self, state):
-        t = time.time()
-        # TODO: await self._append_stream(f"credit-{state['application_id']}", CreditRecordOpened(...).to_store_dict(), expected_version=-1)
-        await self._record_node_execution("open_credit_record",["applicant_id"],["credit_stream_opened"],int((time.time()-t)*1000))
-        return state
-
-    async def _node_load_registry(self, state):
-        t = time.time()
-        # TODO: profile = await self.registry.get_company(state["applicant_id"])
-        # TODO: hist = await self.registry.get_financial_history(state["applicant_id"], years=[2022,2023,2024])
-        # TODO: flags = await self.registry.get_compliance_flags(state["applicant_id"])
-        # TODO: loans = await self.registry.get_loan_relationships(state["applicant_id"])
-        ms = int((time.time()-t)*1000)
-        await self._record_tool_call("query_applicant_registry", f"company_id={state['applicant_id']}", "3yr financials loaded", ms)
-        # TODO: await self._append_stream(f"credit-{state['application_id']}", HistoricalProfileConsumed(...).to_store_dict())
-        await self._record_node_execution("load_applicant_registry",["applicant_id"],["historical_financials","compliance_flags","loan_history"],ms)
-        return {**state,"company_profile":{},"historical_financials":[],"compliance_flags":[],"loan_history":[]}
-
-    async def _node_load_facts(self, state):
-        t = time.time()
-        # TODO: load ExtractionCompleted events from f"docpkg-{state['application_id']}"
-        # TODO: merge FinancialFacts from income_statement + balance_sheet documents
-        ms = int((time.time()-t)*1000)
-        await self._record_tool_call("load_event_store_stream", f"docpkg-{state['application_id']}", "ExtractionCompleted events loaded", ms)
-        # TODO: await self._append_stream(f"credit-{state['application_id']}", ExtractedFactsConsumed(...).to_store_dict())
-        await self._record_node_execution("load_extracted_facts",["document_package_events"],["extracted_facts","quality_flags"],ms)
-        return {**state,"extracted_facts":{},"quality_flags":[]}
-
-    async def _node_analyze(self, state):
-        t = time.time()
-        hist = state.get("historical_financials") or []
-        fin_table = "\n".join([f"FY{f['fiscal_year'] if isinstance(f,dict) else ''}: (historical data)" for f in hist]) if hist else "No historical data loaded — TODO: implement load_applicant_registry"
-        system = """You are a commercial credit analyst at Apex Financial Services.
-Evaluate the loan application and return ONLY a JSON object with these fields:
-{"risk_tier":"LOW"|"MEDIUM"|"HIGH","recommended_limit_usd":<int>,"confidence":<float 0-1>,
- "rationale":"<3-5 sentences>","key_concerns":[],"data_quality_caveats":[],"policy_overrides_applied":[]}
-Hard policy rules you must enforce:
-1. recommended_limit_usd <= annual_revenue * 0.35
-2. Any prior default → risk_tier must be HIGH
-3. Active HIGH compliance flag → confidence must be <= 0.50"""
-        user = f"""Applicant: {state.get('company_profile',{}).get('name','Unknown')}
-Requested: ${state.get('requested_amount_usd',0):,.0f} for {state.get('loan_purpose','unknown')}
-Historical financials:\n{fin_table}
-Current year extracted facts: {json.dumps(state.get('extracted_facts',{}),default=str)[:1000]}
-Quality flags: {state.get('quality_flags',[])}
-Compliance flags: {state.get('compliance_flags',[])}
-Prior loans: {state.get('loan_history',[])}"""
-        try:
-            content, tok_in, tok_out, cost = await self._call_llm(system, user, max_tokens=800)
-            import re; m = re.search(r'\{.*\}', content, re.DOTALL)
-            decision = json.loads(m.group()) if m else {}
-        except Exception as e:
-            decision = {"risk_tier":"MEDIUM","recommended_limit_usd":int(state.get("requested_amount_usd",0)*0.8),"confidence":0.45,"rationale":f"Analysis deferred: {e}","key_concerns":["LLM analysis failed — human review required"],"data_quality_caveats":[],"policy_overrides_applied":[]}
-            tok_in=tok_out=0; cost=0.0
-        ms = int((time.time()-t)*1000)
-        await self._record_node_execution("analyze_credit_risk",["historical_financials","extracted_facts"],["credit_decision"],ms,tok_in,tok_out,cost)
-        return {**state,"credit_decision":decision}
-
-    async def _node_policy(self, state):
-        t = time.time()
-        d = state.get("credit_decision") or {}; violations = []
-        hist = state.get("historical_financials") or []
-        if hist:
-            rev = hist[-1].get("total_revenue",0) if isinstance(hist[-1],dict) else 0
-            if rev > 0 and d.get("recommended_limit_usd",0) > rev*0.35:
-                d["recommended_limit_usd"] = int(rev*0.35); violations.append("REV_CAP")
-        if any(l.get("default_occurred") for l in (state.get("loan_history") or [])):
-            d["risk_tier"] = "HIGH"; violations.append("PRIOR_DEFAULT")
-        if any(f.get("severity")=="HIGH" and f.get("is_active") for f in (state.get("compliance_flags") or [])):
-            d["confidence"] = min(d.get("confidence",1.0), 0.50); violations.append("COMPLIANCE_FLAG")
-        if violations: d["policy_overrides_applied"] = d.get("policy_overrides_applied",[]) + violations
-        await self._record_node_execution("apply_policy_constraints",["credit_decision"],["credit_decision"],int((time.time()-t)*1000))
-        return {**state,"credit_decision":d,"policy_violations":violations}
-
-    async def _node_write(self, state):
-        t = time.time()
-        app_id = state["application_id"]; d = state["credit_decision"]
-        # TODO: append CreditAnalysisCompleted to f"credit-{app_id}"
-        # TODO: append FraudScreeningRequested to f"loan-{app_id}"
-        # Use OCC retry via self._append_stream()
-        events_written = [
-            {"stream_id":f"credit-{app_id}","event_type":"CreditAnalysisCompleted","stream_position":"TODO"},
-            {"stream_id":f"loan-{app_id}","event_type":"FraudScreeningRequested","stream_position":"TODO"},
-        ]
-        await self._record_output_written(events_written, f"Credit: {d.get('risk_tier')} risk, ${d.get('recommended_limit_usd',0):,.0f} limit, {d.get('confidence',0):.0%} confidence. Fraud screening triggered.")
-        await self._record_node_execution("write_output",["credit_decision"],["events_written"],int((time.time()-t)*1000))
-        return {**state,"output_events_written":events_written,"next_agent_triggered":"fraud_detection"}
 
 
 class DocumentProcessingAgent(BaseApexAgent):

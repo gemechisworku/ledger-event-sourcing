@@ -64,8 +64,8 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 3.1 | Agents on `base_agent.py` | [`04-domain-model/README.md`](04-domain-model/README.md), README roadmap | Fraud, compliance, orchestrator, doc processing per roadmap | [ ] |
-| 3.2 | Gate | — | `uv run pytest tests/test_narratives.py -v` | [ ] |
+| 3.1 | Agents on `base_agent.py` | [`04-domain-model/README.md`](04-domain-model/README.md), README roadmap | Fraud, compliance, orchestrator, doc processing per roadmap | [~] |
+| 3.2 | Gate | — | `uv run pytest tests/test_narratives.py -v` | [~] |
 
 **Primary code:** `src/agents/base_agent.py`, `src/agents/*`.
 
@@ -75,14 +75,14 @@
 
 | # | Task | Spec / detail | Verification | Done |
 |---|------|---------------|--------------|------|
-| 4.1 | `ProjectionDaemon` | [`05-projections-cqrs/daemon.md`](05-projections-cqrs/daemon.md), [`slo-and-lag.md`](05-projections-cqrs/slo-and-lag.md) | Checkpoints + fault tolerance + `get_lag` / `get_all_lags` | [ ] |
-| 4.2 | ApplicationSummary | [`05-projections-cqrs/projections/application-summary.md`](05-projections-cqrs/projections/application-summary.md) | Table + upsert from events | [ ] |
-| 4.3 | AgentPerformanceLedger | [`05-projections-cqrs/projections/agent-performance.md`](05-projections-cqrs/projections/agent-performance.md) | Metrics per agent + model version | [ ] |
-| 4.4 | ComplianceAuditView | [`05-projections-cqrs/projections/compliance-audit.md`](05-projections-cqrs/projections/compliance-audit.md) | `get_current`, `get_compliance_at`, `rebuild_from_scratch` | [ ] |
-| 4.5 | Upcaster registry | [`06-upcasting-integrity-memory/upcasting.md`](06-upcasting-integrity-memory/upcasting.md) | Load path calls registry; immutability test | [ ] |
-| 4.6 | Audit chain | [`06-upcasting-integrity-memory/audit-chain.md`](06-upcasting-integrity-memory/audit-chain.md) | `run_integrity_check` | [ ] |
-| 4.7 | Gas Town | [`06-upcasting-integrity-memory/gas-town.md`](06-upcasting-integrity-memory/gas-town.md) | `reconstruct_agent_context` + crash scenario test | [ ] |
-| 4.8 | Gate | — | `uv run pytest tests/test_projections.py -v` + any `test_upcasting` / `test_gas_town` | [ ] |
+| 4.1 | `ProjectionDaemon` | [`05-projections-cqrs/daemon.md`](05-projections-cqrs/daemon.md), [`slo-and-lag.md`](05-projections-cqrs/slo-and-lag.md) | Checkpoints + fault tolerance + `get_lag` / `get_all_lags` | [x] |
+| 4.2 | ApplicationSummary | [`05-projections-cqrs/projections/application-summary.md`](05-projections-cqrs/projections/application-summary.md) | Table + upsert from events | [x] |
+| 4.3 | AgentPerformanceLedger | [`05-projections-cqrs/projections/agent-performance.md`](05-projections-cqrs/projections/agent-performance.md) | Metrics per agent + model version | [x] |
+| 4.4 | ComplianceAuditView | [`05-projections-cqrs/projections/compliance-audit.md`](05-projections-cqrs/projections/compliance-audit.md) | `get_current`, `get_compliance_at`, `rebuild_from_scratch` | [x] |
+| 4.5 | Upcaster registry | [`06-upcasting-integrity-memory/upcasting.md`](06-upcasting-integrity-memory/upcasting.md) | Load path calls registry; immutability test | [x] |
+| 4.6 | Audit chain | [`06-upcasting-integrity-memory/audit-chain.md`](06-upcasting-integrity-memory/audit-chain.md) | `run_integrity_check` | [x] |
+| 4.7 | Gas Town | [`06-upcasting-integrity-memory/gas-town.md`](06-upcasting-integrity-memory/gas-town.md) | `reconstruct_agent_context` + crash scenario test | [x] |
+| 4.8 | Gate | — | `uv run pytest tests/test_projections.py -v` + any `test_upcasting` / `test_gas_town` | [x] |
 
 **Primary code:** `src/projections/`, `src/upcasters.py`, optional `src/integrity/`.
 
@@ -134,6 +134,8 @@ _Add a row when you complete a phase or merge a significant chunk._
 | 2026-03-19 | **Phase 1 (EventStore):** `src/schema.sql` + PostgreSQL `EventStore` (append OCC, outbox, load_stream, load_all, checkpoints). `tests/test_event_store.py` vs Docker Postgres; integration tests **skip** if DB unreachable. `tests/phase1/test_event_store.py` **11 passed** (InMemory). |
 | 2026-03-19 | **Phase 1 complete (1.5):** `ApplicantRegistryClient` implemented in `src/registry/client.py`; shared DDL in `src/registry/schema.py` (used by `datagen/generate_all.py`). `tests/test_applicant_registry_client.py` **6 passed** vs Postgres. Event store integration tests also accept `APPLICANT_REGISTRY_URL` as DB fallback. |
 | 2026-03-21 | **Phase 2 complete:** `src/domain/aggregates/*` (LoanApplication, AgentSession, ComplianceRecord, AuditLedger), `src/domain/handlers.py`, `src/domain/streams.py`. Business rules: Gas Town (first event `AgentSessionStarted`), confidence floor REFER, contributing sessions, second credit + human override, compliance before approval. Gate: `pytest tests/test_domain.py` **8 passed** (InMemory). |
+| 2026-03-25 | **Phase 3 (partial):** `BaseApexAgent` now appends agent-session events and implements `_append_with_retry` (OCC). `CreditAnalysisAgent` uses idempotent `CreditRecordOpened` / `CreditAnalysisCompleted` + single `FraudScreeningRequested`. **NARR-01** implemented in `tests/test_narratives.py` (requires PostgreSQL; skips if DB unreachable). |
+| 2026-03-25 | **Phase 4 complete:** `src/projections/` (daemon, ApplicationSummary, AgentPerformanceLedger, ComplianceAuditView), `src/upcasters.py` + `EventStore` load-path upcasting, `src/integrity/audit_chain.py`, `src/gas_town.py`. Schema: `projection_*` tables in `schema.sql`. Checkpoints default to **-1** (none processed). Gates: `tests/test_projections.py`, `tests/test_upcasting.py`, `tests/test_gas_town.py`, `tests/test_integrity.py`. |
 
 ---
 

@@ -37,17 +37,22 @@ from __future__ import annotations
 import time, json
 from datetime import datetime
 from decimal import Decimal
-from typing import TypedDict, Annotated
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import StateGraph, END
 
-from src.agents.base_agent import BaseApexAgent
+from src.agents.base_agent import MAX_OCC_RETRIES, BaseApexAgent
+from src.event_store import OptimisticConcurrencyError
 from src.schema.events import (
-    CreditRecordOpened, HistoricalProfileConsumed, ExtractedFactsConsumed,
-    CreditAnalysisCompleted, CreditAnalysisDeferred,
+    CreditRecordOpened,
+    HistoricalProfileConsumed,
+    ExtractedFactsConsumed,
+    CreditAnalysisCompleted,
+    CreditAnalysisDeferred,
     FraudScreeningRequested,
-    CreditDecision, RiskTier, FinancialFacts,
+    CreditDecision,
+    RiskTier,
 )
 
 
@@ -83,7 +88,6 @@ class CreditState(TypedDict):
 class CreditAnalysisAgent(BaseApexAgent):
 
     def build_graph(self) -> Any:
-        from typing import Any
         g = StateGraph(CreditState)
         g.add_node("validate_inputs",          self._node_validate_inputs)
         g.add_node("open_credit_record",       self._node_open_credit_record)
@@ -167,8 +171,20 @@ class CreditAnalysisAgent(BaseApexAgent):
             opened_at=datetime.now(),
         ).to_store_dict()
 
-        # New stream — expected_version = -1
-        await self.store.append(credit_stream, [event], expected_version=-1)
+        for _attempt in range(MAX_OCC_RETRIES):
+            existing = await self.store.load_stream(credit_stream)
+            if any(e.event_type == "CreditRecordOpened" for e in existing):
+                break
+            try:
+                ver = await self.store.stream_version(credit_stream)
+                await self.store.append(credit_stream, [event], expected_version=ver)
+                break
+            except OptimisticConcurrencyError:
+                continue
+        else:
+            existing = await self.store.load_stream(credit_stream)
+            if not any(e.event_type == "CreditRecordOpened" for e in existing):
+                raise RuntimeError("Could not open credit record (OCC retries exhausted)")
 
         ms = int((time.time() - t) * 1000)
         await self._record_node_execution(
@@ -449,20 +465,25 @@ Provide your analysis as JSON."""
     async def _node_write_output(self, state: CreditState) -> CreditState:
         t = time.time()
         app_id = state["application_id"]
-        d      = state["credit_decision"]
+        d = state["credit_decision"] or {}
+        credit_sid = f"credit-{app_id}"
+        loan_sid = f"loan-{app_id}"
 
-        # Build and append CreditAnalysisCompleted
+        rt = str(d.get("risk_tier", "MEDIUM")).upper()
+        if rt not in ("LOW", "MEDIUM", "HIGH"):
+            rt = "MEDIUM"
+
         credit_event = CreditAnalysisCompleted(
             application_id=app_id,
             session_id=self.session_id,
             decision=CreditDecision(
-                risk_tier=RiskTier(d["risk_tier"]),
-                recommended_limit_usd=Decimal(str(d["recommended_limit_usd"])),
-                confidence=float(d["confidence"]),
+                risk_tier=RiskTier(rt),
+                recommended_limit_usd=Decimal(str(d.get("recommended_limit_usd", 0))),
+                confidence=float(d.get("confidence", 0.6)),
                 rationale=d.get("rationale", ""),
-                key_concerns=d.get("key_concerns", []),
-                data_quality_caveats=d.get("data_quality_caveats", []),
-                policy_overrides_applied=d.get("policy_overrides_applied", []),
+                key_concerns=list(d.get("key_concerns") or []),
+                data_quality_caveats=list(d.get("data_quality_caveats") or []),
+                policy_overrides_applied=list(d.get("policy_overrides_applied") or []),
             ),
             model_version=self.model,
             model_deployment_id=f"dep-{uuid4().hex[:8]}",
@@ -471,30 +492,48 @@ Provide your analysis as JSON."""
             completed_at=datetime.now(),
         ).to_store_dict()
 
-        # OCC-safe write to credit stream
-        positions = await self._append_with_retry(
-            f"credit-{app_id}", [credit_event],
-            causation_id=self.session_id,
-        )
+        positions: list[int] = []
+        for _attempt in range(MAX_OCC_RETRIES):
+            evs = await self.store.load_stream(credit_sid)
+            if any(e.event_type == "CreditAnalysisCompleted" for e in evs):
+                break
+            try:
+                ver = await self.store.stream_version(credit_sid)
+                positions = await self.store.append(
+                    credit_sid,
+                    [credit_event],
+                    expected_version=ver,
+                    causation_id=self.session_id,
+                )
+                break
+            except OptimisticConcurrencyError:
+                continue
+        else:
+            evs = await self.store.load_stream(credit_sid)
+            if not any(e.event_type == "CreditAnalysisCompleted" for e in evs):
+                raise RuntimeError("Could not append CreditAnalysisCompleted (OCC retries exhausted)")
 
-        # Trigger next agent: append FraudScreeningRequested to loan stream
-        fraud_trigger = FraudScreeningRequested(
-            application_id=app_id,
-            requested_at=datetime.now(),
-            triggered_by_event_id=self.session_id,
-        ).to_store_dict()
-        await self._append_with_retry(f"loan-{app_id}", [fraud_trigger])
+        loan_evs = await self.store.load_stream(loan_sid)
+        if not any(e.event_type == "FraudScreeningRequested" for e in loan_evs):
+            fraud_trigger = FraudScreeningRequested(
+                application_id=app_id,
+                requested_at=datetime.now(),
+                triggered_by_event_id=self.session_id,
+            ).to_store_dict()
+            await self._append_with_retry(loan_sid, [fraud_trigger])
 
         events_written = [
-            {"stream_id": f"credit-{app_id}", "event_type": "CreditAnalysisCompleted",
-             "stream_position": positions[0] if positions else -1},
-            {"stream_id": f"loan-{app_id}", "event_type": "FraudScreeningRequested",
-             "stream_position": -1},
+            {
+                "stream_id": credit_sid,
+                "event_type": "CreditAnalysisCompleted",
+                "stream_position": positions[0] if positions else -1,
+            },
+            {"stream_id": loan_sid, "event_type": "FraudScreeningRequested", "stream_position": -1},
         ]
         await self._record_output_written(
             events_written,
-            f"Credit: {d['risk_tier']} risk, ${d['recommended_limit_usd']:,.0f} limit, "
-            f"{d['confidence']:.0%} confidence. Fraud screening triggered.",
+            f"Credit: {rt} risk, ${float(d.get('recommended_limit_usd', 0)):,.0f} limit, "
+            f"{float(d.get('confidence', 0)):.0%} confidence. Fraud screening triggered.",
         )
 
         ms = int((time.time() - t) * 1000)

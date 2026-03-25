@@ -120,6 +120,41 @@ async def test_concurrent_double_append_exactly_one_succeeds(store):
     assert stream_events[1].stream_position == 2
     assert stream_events[1].event_type in ("A", "B"), "Winner is one of the two contenders"
 
+
+@pytest.mark.asyncio
+async def test_concurrent_append_after_three_prior_events(store):
+    """
+    Rubric-aligned OCC scenario: current_version=3, both contenders use expected_version=3;
+    exactly one writes stream_position=4; final stream length is 4.
+    """
+    sid = "test-concurrent-four-001"
+    await store.append(sid, _event("E1"), expected_version=-1)
+    await store.append(sid, _event("E2"), expected_version=1)
+    await store.append(sid, _event("E3"), expected_version=2)
+    assert await store.stream_version(sid) == 3
+
+    results = await asyncio.gather(
+        store.append(sid, _event("A"), expected_version=3),
+        store.append(sid, _event("B"), expected_version=3),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if isinstance(r, list)]
+    errors = [r for r in results if isinstance(r, OptimisticConcurrencyError)]
+    assert len(successes) == 1
+    assert len(errors) == 1
+
+    assert successes[0] == [4], "Winning task must append at stream_position 4"
+
+    occ_err = errors[0]
+    assert isinstance(occ_err, OptimisticConcurrencyError)
+    assert occ_err.stream_id == sid
+    assert occ_err.expected == 3
+    assert occ_err.actual == 4
+
+    stream_events = await store.load_stream(sid)
+    assert len(stream_events) == 4
+
+
 @pytest.mark.asyncio
 async def test_load_stream_ordered(store):
     await store.append("test-load-001", _event("E",3), expected_version=-1)

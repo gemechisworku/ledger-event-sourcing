@@ -1,32 +1,75 @@
 """
-src/upcasters.py — UpcasterRegistry
-=======================================
-COMPLETION STATUS: STUB — implement upcast() for two event versions.
-
-Upcasters transform old event versions to the current version ON READ.
-They NEVER write to the events table. Immutability is non-negotiable.
-
-IMPLEMENT:
-  CreditAnalysisCompleted v1 → v2: add model_versions={} if absent
-  DecisionGenerated v1 → v2: add model_versions={} if absent
-
-RULE: if event_version == current version, return unchanged.
-      if event_version < current version, apply the chain of upcasters.
+UpcasterRegistry — transform older event versions on read only.
+Never mutates persisted rows.
 """
 from __future__ import annotations
 
+from typing import Any
+
+from src.schema.events import StoredEvent
+
+
 class UpcasterRegistry:
-    """Apply on load_stream() — never on append()."""
+    """Apply on load_stream / load_all — never on append()."""
+
+    def __init__(self) -> None:
+        self._chains: dict[str, dict[int, Any]] = {}
+
+    def register(self, event_type: str, from_version: int):
+        """Decorator: register fn(payload: dict) -> dict for one version step."""
+
+        def decorator(fn):
+            self._chains.setdefault(event_type, {})[from_version] = fn
+            return fn
+
+        return decorator
+
     def upcast(self, event: dict) -> dict:
-        et = event.get("event_type"); ver = event.get("event_version", 1)
-        if et == "CreditAnalysisCompleted" and ver < 2:
-            event = dict(event); event["event_version"] = 2
-            p = dict(event.get("payload", {}))
-            p.setdefault("regulatory_basis", [])
-            event["payload"] = p
-        if et == "DecisionGenerated" and ver < 2:
-            event = dict(event); event["event_version"] = 2
-            p = dict(event.get("payload", {}))
-            p.setdefault("model_versions", {})
-            event["payload"] = p
-        return event
+        et = event.get("event_type")
+        v = int(event.get("event_version", 1))
+        chain = self._chains.get(et, {})
+        out = dict(event)
+        while v in chain:
+            out["payload"] = chain[v](dict(out.get("payload", {})))
+            v += 1
+            out["event_version"] = v
+        return out
+
+
+def upcast_stored_event(registry: UpcasterRegistry | None, ev: StoredEvent) -> StoredEvent:
+    if registry is None:
+        return ev
+    d = {
+        "event_id": ev.event_id,
+        "stream_id": ev.stream_id,
+        "stream_position": ev.stream_position,
+        "global_position": ev.global_position,
+        "event_type": ev.event_type,
+        "event_version": ev.event_version,
+        "payload": dict(ev.payload),
+        "metadata": dict(ev.metadata),
+        "recorded_at": ev.recorded_at,
+    }
+    d = registry.upcast(d)
+    return StoredEvent(**d)
+
+
+def default_upcaster_registry() -> UpcasterRegistry:
+    """Built-in v1 → current for known event types."""
+
+    r = UpcasterRegistry()
+
+    @r.register("CreditAnalysisCompleted", 1)
+    def _credit_v1_to_2(payload: dict) -> dict:
+        p = dict(payload)
+        p.setdefault("model_version", "legacy-pre-2026")
+        p.setdefault("regulatory_basis", [])
+        return p
+
+    @r.register("DecisionGenerated", 1)
+    def _decision_v1_to_2(payload: dict) -> dict:
+        p = dict(payload)
+        p.setdefault("model_versions", {})
+        return p
+
+    return r

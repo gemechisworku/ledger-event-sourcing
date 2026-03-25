@@ -66,3 +66,56 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished
   ON outbox (created_at) WHERE published_at IS NULL;
+
+-- ─── Read models (Phase 4 projections) ───────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS projection_application_summary (
+  application_id            TEXT PRIMARY KEY,
+  state                     TEXT NOT NULL DEFAULT 'UNKNOWN',
+  applicant_id              TEXT,
+  requested_amount_usd      NUMERIC,
+  approved_amount_usd       NUMERIC,
+  risk_tier                 TEXT,
+  fraud_score               DOUBLE PRECISION,
+  compliance_status         TEXT,
+  decision                  TEXT,
+  agent_sessions_completed  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_event_type           TEXT,
+  last_event_at             TIMESTAMPTZ,
+  human_reviewer_id         TEXT,
+  final_decision_at         TIMESTAMPTZ,
+  last_global_position      BIGINT NOT NULL DEFAULT 0,
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS projection_agent_performance (
+  agent_id              TEXT NOT NULL,
+  model_version         TEXT NOT NULL,
+  analyses_completed    INTEGER NOT NULL DEFAULT 0,
+  decisions_generated   INTEGER NOT NULL DEFAULT 0,
+  avg_confidence_score  DOUBLE PRECISION,
+  avg_duration_ms       DOUBLE PRECISION,
+  approve_rate          DOUBLE PRECISION,
+  decline_rate          DOUBLE PRECISION,
+  refer_rate            DOUBLE PRECISION,
+  human_override_rate   DOUBLE PRECISION,
+  first_seen_at         TIMESTAMPTZ,
+  last_seen_at          TIMESTAMPTZ,
+  samples_confidence    INTEGER NOT NULL DEFAULT 0,
+  samples_duration_ms   INTEGER NOT NULL DEFAULT 0,
+  samples_decisions     INTEGER NOT NULL DEFAULT 0,
+  counts_approve        INTEGER NOT NULL DEFAULT 0,
+  counts_decline        INTEGER NOT NULL DEFAULT 0,
+  counts_refer          INTEGER NOT NULL DEFAULT 0,
+  counts_override       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (agent_id, model_version)
+);
+
+CREATE TABLE IF NOT EXISTS projection_compliance_audit (
+  application_id         TEXT PRIMARY KEY,
+  overall_verdict        TEXT,
+  rules_json             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  regulation_set_version TEXT,
+  last_global_position   BIGINT NOT NULL DEFAULT 0,
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

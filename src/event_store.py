@@ -15,6 +15,7 @@ from uuid import UUID
 import asyncpg
 
 from src.schema.events import StoredEvent, StreamMetadata
+from src.upcasters import UpcasterRegistry, upcast_stored_event
 
 
 from dataclasses import dataclass as _dc
@@ -69,6 +70,10 @@ class EventStore:
         self.db_url = db_url
         self.upcasters = upcaster_registry
         self._pool: asyncpg.Pool | None = None
+
+    @property
+    def pool(self):
+        return self._pool
 
     async def connect(self) -> None:
         pool = await asyncpg.create_pool(self.db_url, min_size=1, max_size=10)
@@ -212,7 +217,7 @@ class EventStore:
             rows = await conn.fetch(q, *args)
         out: list[StoredEvent] = [_row_to_event(r) for r in rows]
         if self.upcasters:
-            out = [_upcast_stored(self.upcasters, e) for e in out]
+            out = [upcast_stored_event(self.upcasters, e) for e in out]
         return out
 
     async def load_all(
@@ -257,7 +262,7 @@ class EventStore:
             for r in rows:
                 e = _row_to_event(r)
                 if self.upcasters:
-                    e = _upcast_stored(self.upcasters, e)
+                    e = upcast_stored_event(self.upcasters, e)
                 yield e
             pos = int(rows[-1]["global_position"])
             if len(rows) < batch_size:
@@ -273,7 +278,16 @@ class EventStore:
             )
         if not row:
             return None
-        return _row_to_event(row)
+        e = _row_to_event(row)
+        if self.upcasters:
+            e = upcast_stored_event(self.upcasters, e)
+        return e
+
+    async def max_global_position(self) -> int:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT COALESCE(MAX(global_position), 0)::bigint AS m FROM events")
+        return int(row["m"]) if row else 0
 
     async def archive_stream(self, stream_id: str) -> None:
         assert self._pool is not None
@@ -325,53 +339,7 @@ class EventStore:
                 "SELECT last_position FROM projection_checkpoints WHERE projection_name = $1",
                 projection_name,
             )
-        return int(row["last_position"]) if row else 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Upcaster registry — Phase 4
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class UpcasterRegistry:
-    """Transforms old event versions on load. Pure — never writes to DB."""
-
-    def __init__(self):
-        self._upcasters: dict[str, dict[int, Any]] = {}
-
-    def upcaster(self, event_type: str, from_version: int, to_version: int):
-        def decorator(fn):
-            self._upcasters.setdefault(event_type, {})[from_version] = fn
-            return fn
-
-        return decorator
-
-    def upcast(self, event: dict) -> dict:
-        et = event["event_type"]
-        v = event.get("event_version", 1)
-        chain = self._upcasters.get(et, {})
-        while v in chain:
-            event["payload"] = chain[v](dict(event["payload"]))
-            v += 1
-            event["event_version"] = v
-        return event
-
-
-def _upcast_stored(registry: Any, ev: StoredEvent) -> StoredEvent:
-    """Apply upcaster chain to a StoredEvent, returning a new immutable instance."""
-    d = {
-        "event_id": ev.event_id,
-        "stream_id": ev.stream_id,
-        "stream_position": ev.stream_position,
-        "global_position": ev.global_position,
-        "event_type": ev.event_type,
-        "event_version": ev.event_version,
-        "payload": dict(ev.payload),
-        "metadata": dict(ev.metadata),
-        "recorded_at": ev.recorded_at,
-    }
-    d = registry.upcast(d)
-    return StoredEvent(**d)
+        return int(row["last_position"]) if row else -1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -389,11 +357,16 @@ class InMemoryEventStore:
 
     def __init__(self):
         self.upcasters = None
+        self._pool = None
         self._streams: dict[str, list[StoredEvent]] = _defaultdict(list)
         self._versions: dict[str, int] = {}
         self._global: list[StoredEvent] = []
         self._checkpoints: dict[str, int] = {}
         self._locks: dict[str, _asyncio.Lock] = _defaultdict(_asyncio.Lock)
+
+    @property
+    def pool(self):
+        return None
 
     async def stream_version(self, stream_id: str) -> int:
         return self._versions.get(stream_id, -1)
@@ -425,7 +398,7 @@ class InMemoryEventStore:
                     event_id=str(_uuid4()),
                     stream_id=stream_id,
                     stream_position=pos,
-                    global_position=len(self._global),
+                    global_position=len(self._global) + 1,
                     event_type=event["event_type"],
                     event_version=event.get("event_version", 1),
                     payload=dict(event.get("payload", {})),
@@ -451,16 +424,29 @@ class InMemoryEventStore:
             if e.stream_position >= from_position
             and (to_position is None or e.stream_position <= to_position)
         ]
-        return sorted(events, key=lambda e: e.stream_position)
+        out = sorted(events, key=lambda e: e.stream_position)
+        if self.upcasters:
+            out = [upcast_stored_event(self.upcasters, e) for e in out]
+        return out
 
     async def load_all(self, from_position: int = 0, batch_size: int = 500):
         for e in self._global:
-            if e.global_position >= from_position:
-                yield e
+            if e.global_position > from_position:
+                if self.upcasters:
+                    yield upcast_stored_event(self.upcasters, e)
+                else:
+                    yield e
+
+    async def max_global_position(self) -> int:
+        if not self._global:
+            return 0
+        return max(int(e.global_position) for e in self._global)
 
     async def get_event(self, event_id: str) -> StoredEvent | None:
         for e in self._global:
             if e.event_id == event_id:
+                if self.upcasters:
+                    return upcast_stored_event(self.upcasters, e)
                 return e
         return None
 
@@ -468,4 +454,4 @@ class InMemoryEventStore:
         self._checkpoints[projection_name] = position
 
     async def load_checkpoint(self, projection_name: str) -> int:
-        return self._checkpoints.get(projection_name, 0)
+        return self._checkpoints.get(projection_name, -1)
