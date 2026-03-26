@@ -1,4 +1,4 @@
-"""Canonical stream id builders — must match `src/schema/events.py` headers."""
+"""Canonical stream id builders — must match `src/models/events.py` headers."""
 
 
 def loan_stream_id(application_id: str) -> str:

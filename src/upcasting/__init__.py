@@ -1,5 +1,3 @@
-"""Compatibility shim — canonical: `src.upcasting`."""
-
 from src.upcasting.registry import UpcasterRegistry, upcast_stored_event
 from src.upcasting.upcasters import default_upcaster_registry
 
