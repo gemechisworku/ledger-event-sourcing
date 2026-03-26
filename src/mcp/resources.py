@@ -1,4 +1,12 @@
-"""MCP resources (query side) — projections and justified stream reads."""
+"""
+MCP resources (query side) — projections and justified stream reads.
+
+Justified stream replay (not served from projection tables):
+  - ``ledger://applications/{id}/audit-trail`` — loan stream replay for audit visibility.
+  - ``ledger://agents/{id}/sessions/{session_id}`` — agent session stream replay for session forensics.
+
+All other resources read from projections or operational tables (e.g. agent performance SQL).
+"""
 from __future__ import annotations
 
 import json
@@ -76,6 +84,7 @@ def register_resources(
     @mcp.resource("ledger://ledger/health")
     async def resource_health() -> str:
         if daemon is None:
-            return json.dumps({"lags": {}, "note": "daemon not attached"})
+            return json.dumps({"lags": {}, "lags_ms": {}, "note": "daemon not attached"})
         lags = await daemon.get_all_lags()
-        return json.dumps({"lags": lags})
+        lags_ms = await daemon.get_all_lags_ms()
+        return json.dumps({"lags": lags, "lags_ms": lags_ms})

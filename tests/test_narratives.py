@@ -201,6 +201,16 @@ def _narr_company_profile(*, company_id: str, jurisdiction: str = "WA") -> Compa
     )
 
 
+def _credit_registry_mock(applicant_id: str) -> MagicMock:
+    """ApplicantRegistry-compatible mock: get_company and related calls are async."""
+    reg = MagicMock()
+    reg.get_company = AsyncMock(return_value=_narr_company_profile(company_id=applicant_id))
+    reg.get_financial_history = AsyncMock(return_value=[])
+    reg.get_compliance_flags = AsyncMock(return_value=[])
+    reg.get_loan_relationships = AsyncMock(return_value=[])
+    return reg
+
+
 @pytest.mark.asyncio
 async def test_narr01_concurrent_occ_collision(store):
     """
@@ -248,7 +258,7 @@ async def test_narr01_concurrent_occ_collision(store):
             agent_id="credit-test",
             agent_type=AgentType.CREDIT_ANALYSIS.value,
             store=store,
-            registry=MagicMock(),
+            registry=_credit_registry_mock("COMP-NARR01"),
             client=client,
         )
 

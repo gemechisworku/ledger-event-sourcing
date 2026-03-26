@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from src.projections.base import Projection
@@ -23,6 +24,7 @@ class ProjectionDaemon:
         self._projections = list(projections)
         self._running = False
         self._fail_counts: dict[tuple[str, int], int] = {}
+        self._ms_per_event_ewma: dict[str, float] = {}
 
     @property
     def projections(self) -> list[Projection]:
@@ -44,6 +46,7 @@ class ProjectionDaemon:
         checkpoints = [await self._store.load_checkpoint(p.name) for p in self._projections]
         start = min(checkpoints)
         processed = 0
+        t0 = time.perf_counter()
         async for ev in self._store.load_all(from_position=start, batch_size=batch_size):
             processed += 1
             for proj in self._projections:
@@ -54,6 +57,7 @@ class ProjectionDaemon:
                     await self._store.save_checkpoint(proj.name, int(ev.global_position))
                     continue
                 key = (proj.name, int(ev.global_position))
+                t_apply = time.perf_counter()
                 try:
                     await proj.apply(ev)
                     await self._store.save_checkpoint(proj.name, int(ev.global_position))
@@ -66,6 +70,14 @@ class ProjectionDaemon:
                         logger.warning("skipping event g=%s for projection %s after %s failures", ev.global_position, proj.name, n)
                         await self._store.save_checkpoint(proj.name, int(ev.global_position))
                         self._fail_counts.pop(key, None)
+                dt_ms = (time.perf_counter() - t_apply) * 1000
+                prev = self._ms_per_event_ewma.get(proj.name, dt_ms)
+                self._ms_per_event_ewma[proj.name] = 0.85 * prev + 0.15 * dt_ms
+        if processed > 0:
+            batch_ms = (time.perf_counter() - t0) * 1000
+            per = batch_ms / processed
+            for p in self._projections:
+                self._ms_per_event_ewma[p.name] = 0.8 * self._ms_per_event_ewma.get(p.name, per) + 0.2 * per
         return processed
 
     async def get_all_lags(self) -> dict[str, int]:
@@ -85,3 +97,15 @@ class ProjectionDaemon:
                 eff = max(cp, 0)
                 return max(0, tail - eff)
         raise KeyError(projection_name)
+
+    async def get_lag_ms(self, projection_name: str) -> int:
+        """Approximate lag in milliseconds: event backlog × EWMA ms/event per projection."""
+        lag_ev = await self.get_lag(projection_name)
+        m = self._ms_per_event_ewma.get(projection_name, 5.0)
+        return int(lag_ev * m)
+
+    async def get_all_lags_ms(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for p in self._projections:
+            out[p.name] = await self.get_lag_ms(p.name)
+        return out

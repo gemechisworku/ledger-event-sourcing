@@ -1,6 +1,7 @@
 """Phase 5 — MCP tools + resources (InMemoryEventStore)."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -81,6 +82,9 @@ async def test_submit_application_rejects_invalid_loan_purpose():
     assert out.get("error_type") == "ValidationError"
     assert "loan_purpose must be one of:" in (out.get("message") or "")
     assert "application_reference" in (out.get("message") or "").lower()
+    ctx = out.get("context") or {}
+    assert ctx.get("field") == "loan_purpose"
+    assert "working_capital" in (ctx.get("allowed_values") or [])
 
 
 @pytest.mark.asyncio
@@ -246,10 +250,20 @@ async def test_lifecycle_tools_only():
 
     rr = await mcp._read_resource_mcp("ledger://applications/MCP-LIFE-1/compliance")
     assert rr[0].content
+    comp = json.loads(rr[0].content)
+    comp_blob = json.dumps(comp, default=str)
+    assert comp.get("overall_verdict") == "CLEAR"
+    assert comp.get("regulation_set_version") == "2026-Q1"
+    assert "ComplianceRulePassed" in comp_blob
+    assert "REG-001" in comp_blob
 
     r_app = await mcp._read_resource_mcp("ledger://applications/MCP-LIFE-1")
     text = r_app[0].content
     assert "MCP-LIFE-1" in text or "SUBMITTED" in text or "application_id" in text
+
+    rh = await mcp._read_resource_mcp("ledger://ledger/health")
+    health = json.loads(rh[0].content)
+    assert "lags_ms" in health
 
 
 @pytest.mark.asyncio

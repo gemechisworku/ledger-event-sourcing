@@ -19,10 +19,11 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 import json
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─── ENUMS ───────────────────────────────────────────────────────────────────
@@ -731,34 +732,58 @@ def deserialize_event(event_type: str, payload: dict) -> BaseEvent:
 # Persistence-assigned wrapper returned by EventStore.load_stream / load_all.
 # Distinct from BaseEvent: domain emits BaseEvent, the store returns StoredEvent.
 
-from dataclasses import dataclass, field as dc_field
 
-@dataclass(frozen=True)
-class StoredEvent:
-    """Immutable envelope carrying a domain event plus store-assigned metadata."""
+class StoredEvent(BaseModel):
+    """Immutable envelope (Pydantic) carrying a domain event plus store-assigned metadata."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
     event_id: UUID | str
     stream_id: str
     stream_position: int
     global_position: int
     event_type: str
     event_version: int
-    payload: dict
-    metadata: dict
+    payload: dict[str, Any]
+    metadata: dict[str, Any]
     recorded_at: datetime | str | None = None
 
     def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
+        if hasattr(self, key):
+            return getattr(self, key)
+        raise KeyError(key)
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self, key, default)
 
 
-@dataclass
-class StreamMetadata:
+class StreamMetadata(BaseModel):
     """Typed model for event_streams table rows."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
     stream_id: str
     aggregate_type: str
     current_version: int
     created_at: datetime | None = None
     archived_at: datetime | None = None
-    metadata: dict = dc_field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OptimisticConcurrencyErrorDetail(BaseModel):
+    """Serializable OCC shape (exceptions live on EventStore; use this for APIs/docs)."""
+
+    error_type: Literal["OptimisticConcurrencyError"] = "OptimisticConcurrencyError"
+    stream_id: str
+    expected: int
+    actual: int
+    message: str = ""
+
+
+class DomainErrorDetail(BaseModel):
+    """Serializable domain error shape (mirror of DomainError exception)."""
+
+    error_type: Literal["DomainError"] = "DomainError"
+    message: str
+    aggregate_id: str | None = None
+    rule: str | None = None

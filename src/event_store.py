@@ -15,7 +15,7 @@ from uuid import UUID
 import asyncpg
 
 from src.registry.schema import REGISTRY_SQL
-from src.schema.events import StoredEvent, StreamMetadata
+from src.models.events import StoredEvent, StreamMetadata
 from src.upcasters import UpcasterRegistry, upcast_stored_event
 
 
@@ -71,16 +71,18 @@ def _row_to_event(row: asyncpg.Record) -> StoredEvent:
         payload = json.loads(payload)
     if isinstance(meta, str):
         meta = json.loads(meta)
-    return StoredEvent(
-        event_id=row["event_id"],
-        stream_id=row["stream_id"],
-        stream_position=row["stream_position"],
-        global_position=row["global_position"],
-        event_type=row["event_type"],
-        event_version=row["event_version"],
-        payload=dict(payload) if isinstance(payload, dict) else payload,
-        metadata=dict(meta) if isinstance(meta, dict) else meta,
-        recorded_at=row["recorded_at"],
+    return StoredEvent.model_validate(
+        {
+            "event_id": row["event_id"],
+            "stream_id": row["stream_id"],
+            "stream_position": row["stream_position"],
+            "global_position": row["global_position"],
+            "event_type": row["event_type"],
+            "event_version": row["event_version"],
+            "payload": dict(payload) if isinstance(payload, dict) else payload,
+            "metadata": dict(meta) if isinstance(meta, dict) else meta,
+            "recorded_at": row["recorded_at"],
+        }
     )
 
 
@@ -321,6 +323,28 @@ class EventStore:
             return None
         return _row_to_event(row)
 
+    async def load_stream_persisted(
+        self,
+        stream_id: str,
+        from_position: int = 0,
+        to_position: int | None = None,
+    ) -> list[StoredEvent]:
+        """Load persisted rows without applying upcasters (integrity verification, audit hashing)."""
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            q = (
+                "SELECT event_id, stream_id, stream_position, global_position, event_type, "
+                "event_version, payload, metadata, recorded_at "
+                "FROM events WHERE stream_id = $1 AND stream_position >= $2"
+            )
+            args: list[Any] = [stream_id, from_position]
+            if to_position is not None:
+                q += " AND stream_position <= $3"
+                args.append(to_position)
+            q += " ORDER BY stream_position ASC"
+            rows = await conn.fetch(q, *args)
+        return [_row_to_event(r) for r in rows]
+
     async def max_global_position(self) -> int:
         assert self._pool is not None
         async with self._pool.acquire() as conn:
@@ -401,10 +425,18 @@ class InMemoryEventStore:
         self._global: list[StoredEvent] = []
         self._checkpoints: dict[str, int] = {}
         self._locks: dict[str, _asyncio.Lock] = _defaultdict(_asyncio.Lock)
+        self._archived_at: dict[str, _datetime | None] = {}
+        self._stream_created: dict[str, _datetime] = {}
 
     @property
     def pool(self):
         return None
+
+    def _touch_stream_meta(self, stream_id: str) -> None:
+        if stream_id not in self._stream_created:
+            self._stream_created[stream_id] = _datetime.now(timezone.utc)
+        if stream_id not in self._archived_at:
+            self._archived_at[stream_id] = None
 
     async def stream_version(self, stream_id: str) -> int:
         return self._versions.get(stream_id, -1)
@@ -430,18 +462,22 @@ class InMemoryEventStore:
             if correlation_id:
                 meta["correlation_id"] = correlation_id
 
+            self._touch_stream_meta(stream_id)
+
             for i, event in enumerate(events):
                 pos = current + 1 + i
-                stored = StoredEvent(
-                    event_id=str(_uuid4()),
-                    stream_id=stream_id,
-                    stream_position=pos,
-                    global_position=len(self._global) + 1,
-                    event_type=event["event_type"],
-                    event_version=event.get("event_version", 1),
-                    payload=dict(event.get("payload", {})),
-                    metadata=dict(meta),
-                    recorded_at=_datetime.now(timezone.utc).isoformat(),
+                stored = StoredEvent.model_validate(
+                    {
+                        "event_id": str(_uuid4()),
+                        "stream_id": stream_id,
+                        "stream_position": pos,
+                        "global_position": len(self._global) + 1,
+                        "event_type": event["event_type"],
+                        "event_version": event.get("event_version", 1),
+                        "payload": dict(event.get("payload", {})),
+                        "metadata": dict(meta),
+                        "recorded_at": _datetime.now(timezone.utc).isoformat(),
+                    }
                 )
                 self._streams[stream_id].append(stored)
                 self._global.append(stored)
@@ -467,13 +503,59 @@ class InMemoryEventStore:
             out = [upcast_stored_event(self.upcasters, e) for e in out]
         return out
 
-    async def load_all(self, from_position: int = 0, batch_size: int = 500):
-        for e in self._global:
-            if e.global_position > from_position:
+    async def load_stream_persisted(
+        self,
+        stream_id: str,
+        from_position: int = 0,
+        to_position: int | None = None,
+    ) -> list[StoredEvent]:
+        events = [
+            e
+            for e in self._streams.get(stream_id, [])
+            if e.stream_position >= from_position
+            and (to_position is None or e.stream_position <= to_position)
+        ]
+        return sorted(events, key=lambda e: e.stream_position)
+
+    async def load_all(
+        self,
+        from_position: int = 0,
+        event_types: list[str] | None = None,
+        batch_size: int = 500,
+    ):
+        candidates = [e for e in self._global if int(e.global_position) > from_position]
+        if event_types:
+            ft = set(event_types)
+            candidates = [e for e in candidates if e.event_type in ft]
+        candidates.sort(key=lambda e: int(e.global_position))
+        i = 0
+        while i < len(candidates):
+            chunk = candidates[i : i + batch_size]
+            for e in chunk:
                 if self.upcasters:
                     yield upcast_stored_event(self.upcasters, e)
                 else:
                     yield e
+            i += len(chunk)
+
+    async def archive_stream(self, stream_id: str) -> None:
+        self._archived_at[stream_id] = _datetime.now(timezone.utc)
+
+    async def get_stream_metadata(self, stream_id: str) -> StreamMetadata | None:
+        if stream_id not in self._versions and stream_id not in self._stream_created:
+            return None
+        self._touch_stream_meta(stream_id)
+        ver = self._versions.get(stream_id, -1)
+        if ver < 0:
+            return None
+        return StreamMetadata(
+            stream_id=stream_id,
+            aggregate_type=_aggregate_type(stream_id),
+            current_version=ver,
+            created_at=self._stream_created.get(stream_id),
+            archived_at=self._archived_at.get(stream_id),
+            metadata={},
+        )
 
     async def max_global_position(self) -> int:
         if not self._global:
@@ -482,7 +564,7 @@ class InMemoryEventStore:
 
     async def get_event(self, event_id: str) -> StoredEvent | None:
         for e in self._global:
-            if e.event_id == event_id:
+            if str(e.event_id) == str(event_id):
                 if self.upcasters:
                     return upcast_stored_event(self.upcasters, e)
                 return e
@@ -490,7 +572,7 @@ class InMemoryEventStore:
 
     async def get_event_raw(self, event_id: str) -> StoredEvent | None:
         for e in self._global:
-            if e.event_id == event_id:
+            if str(e.event_id) == str(event_id):
                 return e
         return None
 

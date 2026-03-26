@@ -26,7 +26,14 @@ from src.domain.streams import (
 )
 from src.event_store import OptimisticConcurrencyError
 from src.integrity.audit_chain import run_integrity_check
-from src.models.events import AgentType, CreditDecision, LoanPurpose, RiskTier
+from src.models.events import (
+    AgentType,
+    CreditDecision,
+    DomainErrorDetail,
+    LoanPurpose,
+    OptimisticConcurrencyErrorDetail,
+    RiskTier,
+)
 
 _LOAN_PURPOSE_DOC = (
     "working_capital | equipment_financing | real_estate | expansion | "
@@ -39,13 +46,33 @@ def _err(
     message: str,
     *,
     suggested_action: str | None = None,
+    context: dict[str, Any] | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"error_type": error_type, "message": message}
     if suggested_action:
         out["suggested_action"] = suggested_action
+    if context is not None:
+        out["context"] = context
     out.update(extra)
     return out
+
+
+def _domain_context(e: DomainError) -> dict[str, Any]:
+    return DomainErrorDetail(
+        message=str(e),
+        aggregate_id=e.aggregate_id,
+        rule=e.rule,
+    ).model_dump(mode="json")
+
+
+def _occ_context(e: OptimisticConcurrencyError) -> dict[str, Any]:
+    return OptimisticConcurrencyErrorDetail(
+        stream_id=e.stream_id,
+        expected=e.expected,
+        actual=e.actual,
+        message=str(e),
+    ).model_dump(mode="json")
 
 
 def _ok(**payload: Any) -> dict[str, Any]:
@@ -54,6 +81,9 @@ def _ok(**payload: Any) -> dict[str, Any]:
 
 _integrity_last: dict[tuple[str, str], float] = {}
 _INTEGRITY_COOLDOWN_S = 60.0
+
+_SA_DOMAIN = "reload_projections_replay_streams_verify_preconditions_then_retry"
+_SA_VALIDATION = "fix_invalid_fields_to_match_tool_schema_then_retry"
 
 
 def register_tools(mcp: FastMCP, store: Any) -> None:
@@ -90,6 +120,11 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                     "ValidationError",
                     f"loan_purpose must be one of: {allowed}. "
                     f"Received {loan_purpose!r}. Use application_reference for descriptive text.",
+                    suggested_action=_SA_VALIDATION,
+                    context={
+                        "field": "loan_purpose",
+                        "allowed_values": sorted(p.value for p in LoanPurpose),
+                    },
                 )
             await handle_submit_application(
                 store,
@@ -106,9 +141,14 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             v = await store.stream_version(loan_stream_id(application_id))
             return _ok(stream_id=loan_stream_id(application_id), new_stream_version=v)
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except ValidationError as e:
-            return _err("ValidationError", str(e))
+            return _err(
+                "ValidationError",
+                str(e),
+                suggested_action=_SA_VALIDATION,
+                context={"validation_errors": e.errors()},
+            )
 
     @mcp.tool(
         name="start_agent_session",
@@ -143,9 +183,14 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             v = await store.stream_version(sid)
             return _ok(session_id=session_id, context_position=v, stream_id=sid)
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except ValueError as e:
-            return _err("ValidationError", str(e))
+            return _err(
+                "ValidationError",
+                str(e),
+                suggested_action=_SA_VALIDATION,
+                context={"reason": "invalid_agent_type_or_enum"},
+            )
 
     @mcp.tool(
         name="record_credit_analysis",
@@ -181,7 +226,7 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             v = await store.stream_version(credit_stream_id(application_id))
             return _ok(new_stream_version=v, stream_id=credit_stream_id(application_id))
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except OptimisticConcurrencyError as e:
             return _err(
                 "OptimisticConcurrencyError",
@@ -190,6 +235,7 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                 expected_version=e.expected,
                 actual_version=e.actual,
                 suggested_action="reload_stream_and_retry",
+                context=_occ_context(e),
             )
 
     @mcp.tool(
@@ -218,7 +264,7 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             v = await store.stream_version(fraud_stream_id(application_id))
             return _ok(new_stream_version=v, stream_id=fraud_stream_id(application_id))
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except OptimisticConcurrencyError as e:
             return _err(
                 "OptimisticConcurrencyError",
@@ -227,6 +273,7 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                 expected_version=e.expected,
                 actual_version=e.actual,
                 suggested_action="reload_stream_and_retry",
+                context=_occ_context(e),
             )
 
     @mcp.tool(
@@ -257,12 +304,13 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                 stream_id=f"compliance-{application_id}",
             )
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except OptimisticConcurrencyError as e:
             return _err(
                 "OptimisticConcurrencyError",
                 str(e),
                 suggested_action="reload_stream_and_retry",
+                context=_occ_context(e),
             )
 
     @mcp.tool(
@@ -293,9 +341,14 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             )
             return _ok(decision_id=orchestrator_session_id, recommendation=recommendation.upper())
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
         except OptimisticConcurrencyError as e:
-            return _err("OptimisticConcurrencyError", str(e), suggested_action="reload_stream_and_retry")
+            return _err(
+                "OptimisticConcurrencyError",
+                str(e),
+                suggested_action="reload_stream_and_retry",
+                context=_occ_context(e),
+            )
 
     @mcp.tool(
         name="record_human_review",
@@ -317,6 +370,8 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                 return _err(
                     "PreconditionFailed",
                     "override_reason is required when override=True",
+                    suggested_action="provide_override_reason_or_set_override_false",
+                    context={"field": "override_reason", "override": True},
                 )
             await handle_human_review_completed(
                 store,
@@ -329,7 +384,7 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             )
             return _ok(final_decision=final_decision, application_state="updated")
         except DomainError as e:
-            return _err("DomainError", str(e))
+            return _err("DomainError", str(e), suggested_action=_SA_DOMAIN, context=_domain_context(e))
 
     @mcp.tool(
         name="run_integrity_check",
@@ -346,6 +401,8 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
             return _err(
                 "PreconditionFailed",
                 f"Rate limit: wait {_INTEGRITY_COOLDOWN_S:.0f}s between checks for this entity",
+                suggested_action="wait_cooldown_then_retry",
+                context={"cooldown_seconds": _INTEGRITY_COOLDOWN_S, "entity_type": entity_type, "entity_id": entity_id},
             )
         try:
             r = await run_integrity_check(store, entity_type, entity_id)
@@ -356,4 +413,9 @@ def register_tools(mcp: FastMCP, store: Any) -> None:
                 tamper_detected=r.tamper_detected,
             )
         except Exception as e:
-            return _err("DomainError", str(e))
+            return _err(
+                "DomainError",
+                str(e),
+                suggested_action="verify_audit_stream_connectivity_and_payload_shape",
+                context={"exception_type": type(e).__name__},
+            )

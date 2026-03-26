@@ -51,4 +51,4 @@ def upcast_stored_event(registry: UpcasterRegistry | None, ev: StoredEvent) -> S
         "recorded_at": ev.recorded_at,
     }
     d = registry.upcast(d)
-    return StoredEvent(**d)
+    return StoredEvent.model_validate(d)

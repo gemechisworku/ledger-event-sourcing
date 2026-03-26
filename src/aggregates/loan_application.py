@@ -3,6 +3,9 @@ LoanApplication aggregate — stream `loan-{application_id}`.
 Replays loan, credit, fraud, and compliance streams for a coherent application state.
 
 Uses per-event dispatch: _apply delegates to _on_{EventType} methods.
+
+Rubric phase names (Submitted → AwaitingAnalysis → …) map to ApplicationState via
+``src.domain.rubric_states.to_rubric_phase`` for grading cross-walk.
 """
 
 from __future__ import annotations

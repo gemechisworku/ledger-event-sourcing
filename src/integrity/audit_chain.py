@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from src.domain.streams import audit_stream_id
-from src.schema.events import AuditIntegrityCheckRun, StoredEvent
+from src.models.events import AuditIntegrityCheckRun, StoredEvent
 
 
 @dataclass
@@ -22,37 +22,49 @@ def _payload_hash(ev: StoredEvent) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _chain_hash(business_events: list[StoredEvent]) -> str:
+    running = "GENESIS"
+    for e in business_events:
+        running = hashlib.sha256(f"{running}{_payload_hash(e)}".encode()).hexdigest()
+    return running
+
+
 async def run_integrity_check(store, entity_type: str, entity_id: str) -> IntegrityCheckResult:
     sid = audit_stream_id(entity_type, entity_id)
-    events = await store.load_stream(sid)
-    content = [e for e in events if e.event_type != "AuditIntegrityCheckRun"]
+    load_fn = getattr(store, "load_stream_persisted", None) or store.load_stream
+    events = await load_fn(sid)
 
-    previous_hash: str | None = None
-    for e in reversed(events):
-        if e.event_type == "AuditIntegrityCheckRun":
-            previous_hash = (e.payload or {}).get("integrity_hash")
-            break
+    business = [e for e in events if e.event_type != "AuditIntegrityCheckRun"]
+    ic_runs = [e for e in events if e.event_type == "AuditIntegrityCheckRun"]
 
-    running = "GENESIS"
-    for e in content:
-        running = hashlib.sha256(f"{running}{_payload_hash(e)}".encode()).hexdigest()
-    new_hash = running
+    new_hash = _chain_hash(business)
+    tamper_detected = False
+    chain_valid = True
+
+    if ic_runs:
+        last_ic = ic_runs[-1]
+        lp = last_ic.payload or {}
+        prev_n = int(lp.get("events_verified_count") or 0)
+        prev_hash = str(lp.get("integrity_hash") or "")
+        if prev_n == len(business) and prev_hash and new_hash != prev_hash:
+            tamper_detected = True
+            chain_valid = False
 
     ev = AuditIntegrityCheckRun(
         entity_type=entity_type,
         entity_id=entity_id,
         check_timestamp=datetime.now(timezone.utc),
-        events_verified_count=len(content),
+        events_verified_count=len(business),
         integrity_hash=new_hash,
-        previous_hash=previous_hash,
-        chain_valid=True,
-        tamper_detected=False,
+        previous_hash=ic_runs[-1].payload.get("integrity_hash") if ic_runs else None,
+        chain_valid=chain_valid,
+        tamper_detected=tamper_detected,
     )
     ver = await store.stream_version(sid)
     await store.append(sid, [ev.to_store_dict()], expected_version=ver)
 
     return IntegrityCheckResult(
-        events_verified=len(content),
-        chain_valid=True,
-        tamper_detected=False,
+        events_verified=len(business),
+        chain_valid=chain_valid,
+        tamper_detected=tamper_detected,
     )

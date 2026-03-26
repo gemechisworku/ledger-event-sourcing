@@ -1,6 +1,7 @@
 """Phase 4 — projections + daemon (InMemoryEventStore)."""
 from __future__ import annotations
 
+import asyncio
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -138,3 +139,25 @@ async def test_compliance_projection_and_rebuild():
     await comp.rebuild_from_scratch()
     cur2 = await comp.get_current_compliance(app_id)
     assert cur2.get("overall_verdict") == "CLEAR"
+
+
+@pytest.mark.asyncio
+async def test_projection_lag_ms_under_slo_after_concurrent_appends():
+    """Rubric-style: many concurrent writers then catch-up; lag_ms stays modest."""
+    store = InMemoryEventStore()
+
+    async def submit(i: int) -> None:
+        app_id = f"SLO-{i:03d}"
+        await store.append(f"loan-{app_id}", [_submitted(app_id)], expected_version=-1)
+
+    await asyncio.gather(*[submit(i) for i in range(50)])
+
+    projs = [
+        ApplicationSummaryProjection(store),
+        AgentPerformanceLedgerProjection(store),
+        ComplianceAuditProjection(store),
+    ]
+    daemon = ProjectionDaemon(store, projs)
+    await daemon.process_batch(batch_size=200)
+    ms = await daemon.get_lag_ms("application_summary")
+    assert ms < 500
